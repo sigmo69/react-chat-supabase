@@ -28,6 +28,24 @@ function App() {
     }
   }
 
+  // --- НОВА ФУНКЦІЯ ВИДАЛЕННЯ ---
+  const deleteMessage = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      // Оновлюємо стан локально, щоб повідомлення зникло миттєво
+      setMessages((prev) => prev.filter((msg) => msg.id !== id));
+    } catch (err) {
+      console.error('Помилка видалення:', err.message);
+      alert('Не вдалося видалити повідомлення');
+    }
+  }
+
   useEffect(() => {
     fetchMessages()
     const interval = setInterval(fetchMessages, 3000)
@@ -108,13 +126,27 @@ function App() {
               ...styles.messageBubble,
               alignSelf: msg.username === username ? 'flex-end' : 'flex-start',
               background: msg.username === username ? '#3fcf8e' : '#0084ff',
-              borderRadius: msg.username === username ? '15px 15px 2px 15px' : '15px 15px 15px 2px'
+              borderRadius: msg.username === username ? '15px 15px 2px 15px' : '15px 15px 15px 2px',
+              position: 'relative' // Важливо для позиціювання кнопки видалення
             }}>
               <div style={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '3px', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
                 <span>{msg.username || 'Гість'}</span>
                 <span style={{ opacity: 0.7, fontWeight: 'normal' }}>{formatTime(msg.created_at)}</span>
               </div>
-              <div>{msg.messages}</div>
+              <div style={{ paddingRight: msg.username === username ? '20px' : '0' }}>
+                {msg.messages}
+              </div>
+              
+              {/* Кнопка видалення (показуємо тільки для твоїх повідомлень) */}
+              {msg.username === username && (
+                <button 
+                  onClick={() => deleteMessage(msg.id)} 
+                  style={styles.deleteBtn}
+                  title="Видалити"
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
           <div ref={messagesEndRef} />
@@ -142,10 +174,24 @@ const styles = {
   header: { padding: '15px 20px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   logoutBtn: { background: 'none', border: 'none', color: '#ff4d4d', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' },
   messagesList: { flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', background: '#f9f9f9' },
-  messageBubble: { color: 'white', padding: '10px 14px', maxWidth: '80%', wordWrap: 'break-word' },
+  messageBubble: { color: 'white', padding: '10px 14px', maxWidth: '80%', wordWrap: 'break-word', minWidth: '60px' },
   inputArea: { display: 'flex', gap: '10px', padding: '15px 20px', borderTop: '1px solid #eee' },
   input: { flex: 1, padding: '12px 15px', borderRadius: '25px', border: '1px solid #ddd', outline: 'none' },
-  button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 25px', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold' }
+  button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 25px', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold' },
+  // Стиль кнопки видалення
+  deleteBtn: {
+    position: 'absolute',
+    right: '8px',
+    bottom: '8px',
+    background: 'none',
+    border: 'none',
+    color: 'rgba(255, 255, 255, 0.6)',
+    cursor: 'pointer',
+    fontSize: '18px',
+    padding: '0',
+    lineHeight: '1',
+    transition: 'color 0.2s'
+  }
 }
 
 export default App

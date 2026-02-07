@@ -84,7 +84,9 @@ function App() {
   }, [user, currentRoom, view])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages])
 
   // --- 3. ФУНКЦІЇ ---
@@ -102,47 +104,17 @@ function App() {
     }
   }
 
-  const updateProfile = async () => {
-    const { error } = await supabase.auth.updateUser({
-      data: { display_name: newNickname }
-    })
-    if (error) alert(error.message)
-    else {
-      alert('Дані оновлено!')
-      setView('chat')
-    }
-  }
-
-  const createGroup = () => {
-    const name = groupNameInput.trim().toLowerCase()
-    if (name && !groups.includes(name)) {
-      setGroups(prev => [...prev, name])
-      setCurrentRoom(name)
-      setGroupNameInput('')
-      setIsCreatingGroup(false)
-    }
-  }
-
-  const startPrivateChat = (targetLogin) => {
-    const myLogin = user.user_metadata?.display_name || user.email
-    const roomId = [myLogin, targetLogin].sort().join('_')
-    if (!groups.includes(roomId)) setGroups(prev => [...prev, roomId])
-    setCurrentRoom(roomId)
-    setSearchQuery('')
-    setView('chat')
-  }
-
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!newMessage.trim()) return
     const name = user.user_metadata?.display_name || user.email
-    await supabase.from('messages').insert([{ 
-      messages: newMessage, 
-      username: name, 
-      room_id: currentRoom 
+    const { error } = await supabase.from('messages').insert([{ 
+      messages: newMessage, username: name, room_id: currentRoom 
     }])
-    setNewMessage('')
-    fetchMessages()
+    if (!error) {
+      setNewMessage('')
+      fetchMessages()
+    }
   }
 
   // --- РЕНДЕР: ВХІД ---
@@ -151,45 +123,15 @@ function App() {
       <div style={styles.container}>
         <form onSubmit={handleAuth} style={styles.loginBox}>
           <h2 style={{ color: '#3fcf8e', marginBottom: '20px' }}>
-            {isRegistering ? 'Створити акаунт' : 'Вхід у чат'}
+            {isRegistering ? 'Реєстрація' : 'Вхід'}
           </h2>
-          
           {isRegistering && (
-            <input 
-              style={styles.input} 
-              placeholder="Придумайте логін (нікнейм)" 
-              value={login} 
-              onChange={e => setLogin(e.target.value)} 
-              required 
-            />
+            <input style={styles.input} placeholder="Логін" value={login} onChange={e => setLogin(e.target.value)} required />
           )}
-          
-          <input 
-            style={styles.input} 
-            type="email" 
-            placeholder="Ваш Email" 
-            value={email} 
-            onChange={e => setEmail(e.target.value)} 
-            required 
-          />
-          
-          <input 
-            style={styles.input} 
-            type="password" 
-            placeholder="Пароль" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-            required 
-          />
-          
-          <button type="submit" style={styles.button}>
-            {isRegistering ? 'Зареєструватися' : 'Увійти'}
-          </button>
-          
-          <p 
-            onClick={() => setIsRegistering(!isRegistering)} 
-            style={styles.toggleText}
-          >
+          <input style={styles.input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+          <input style={styles.input} type="password" placeholder="Пароль" value={password} onChange={e => setPassword(e.target.value)} required />
+          <button type="submit" style={styles.button}>{isRegistering ? 'Зареєструватися' : 'Увійти'}</button>
+          <p onClick={() => setIsRegistering(!isRegistering)} style={styles.toggleText}>
             {isRegistering ? 'Вже є акаунт? Увійти' : 'Немає акаунта? Зареєструватися'}
           </p>
         </form>
@@ -200,64 +142,51 @@ function App() {
   // --- РЕНДЕР: ДОДАТОК ---
   return (
     <div style={styles.container}>
+      {/* SIDEBAR */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarHeader}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px'}}>
-            <b style={{fontSize: '18px'}}>Чати</b>
-            <button 
-              onClick={() => setIsCreatingGroup(!isCreatingGroup)} 
-              style={styles.addGroupBtn}
-            >
-              +
-            </button>
+            <b>Чати</b>
+            <button onClick={() => setIsCreatingGroup(!isCreatingGroup)} style={styles.addGroupBtn}>+</button>
           </div>
-          
           {isCreatingGroup && (
             <div style={{display: 'flex', gap: '5px', marginBottom: '10px'}}>
-              <input style={{...styles.input, padding: '8px'}} placeholder="Назва групи" value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} />
-              <button onClick={createGroup} style={{...styles.button, padding: '5px 10px'}}>OK</button>
+              <input style={{...styles.input, padding: '8px'}} placeholder="Назва" value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} />
+              <button onClick={() => {
+                const name = groupNameInput.trim().toLowerCase();
+                if(name) { setGroups([...groups, name]); setCurrentRoom(name); setGroupNameInput(''); setIsCreatingGroup(false); }
+              }} style={{...styles.button, padding: '5px 10px'}}>OK</button>
             </div>
           )}
-
-          <input 
-            style={styles.searchInput} 
-            placeholder="Знайти друга..." 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+          <input style={styles.searchInput} placeholder="Пошук..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
           {searchQuery && (
-            <div style={styles.searchResults} onClick={() => startPrivateChat(searchQuery)}>
-              👤 Почати чат з <b>{searchQuery}</b>
-            </div>
+            <div style={styles.searchResults} onClick={() => {
+              const myLogin = user.user_metadata?.display_name || user.email;
+              const roomId = [myLogin, searchQuery].sort().join('_');
+              if (!groups.includes(roomId)) setGroups([...groups, roomId]);
+              setCurrentRoom(roomId); setSearchQuery(''); setView('chat');
+            }}>👤 Чат з {searchQuery}</div>
           )}
         </div>
-
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {groups.map(g => (
-            <div 
-              key={g} 
-              onClick={() => { setCurrentRoom(g); setView('chat'); }} 
-              style={{...styles.roomItem, background: currentRoom === g && view === 'chat' ? '#eefaff' : 'transparent'}}
-            >
-              {g.includes('_') ? `👤 ${g.replace(user.user_metadata?.display_name || '', '').replace('_', '')}` : `# ${g}`}
+            <div key={g} onClick={() => { setCurrentRoom(g); setView('chat'); }} style={{...styles.roomItem, background: currentRoom === g ? '#eefaff' : 'transparent'}}>
+              {g.includes('_') ? `👤 ${g.split('_').find(n => n !== (user.user_metadata?.display_name || user.email))}` : `# ${g}`}
             </div>
           ))}
         </div>
-
         <div style={styles.sidebarFooter}>
-          <div onClick={() => setView('profile')} style={{cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px'}}>
-            <span>⚙️</span>
-            <span style={{fontWeight: 'bold'}}>{user.user_metadata?.display_name || 'Профіль'}</span>
-          </div>
+          <span onClick={() => setView('profile')} style={{cursor:'pointer'}}>⚙️ Профіль</span>
           <button onClick={() => supabase.auth.signOut()} style={styles.logoutBtnSmall}>Вийти</button>
         </div>
       </div>
 
+      {/* CHAT WINDOW */}
       <div style={styles.chatWindow}>
         {view === 'chat' ? (
-          <>
+          <div style={styles.chatFlexWrapper}>
             <div style={styles.header}>
-              <span>{currentRoom.includes('_') ? 'Приватна бесіда' : `Група: #${currentRoom}`}</span>
+              <b>{currentRoom.includes('_') ? 'Приватний чат' : `# ${currentRoom}`}</b>
             </div>
             <div style={styles.messagesList}>
               {messages.map(msg => (
@@ -267,28 +196,25 @@ function App() {
                   background: msg.username === (user.user_metadata?.display_name || user.email) ? '#3fcf8e' : '#0084ff',
                   borderRadius: msg.username === (user.user_metadata?.display_name || user.email) ? '15px 15px 2px 15px' : '15px 15px 15px 2px'
                 }}>
-                  <div style={{fontSize: '10px', opacity: 0.8, marginBottom: '3px'}}>{msg.username}</div>
-                  <div>{msg.messages}</div>
+                  <div style={{fontSize: '10px', opacity: 0.8, marginBottom: '2px'}}>{msg.username}</div>
+                  <div style={{wordBreak: 'break-word'}}>{msg.messages}</div>
                 </div>
               ))}
               <div ref={messagesEndRef} />
             </div>
             <form onSubmit={sendMessage} style={styles.inputArea}>
-              <input style={styles.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Напишіть щось..." />
+              <input style={styles.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Повідомлення..." />
               <button type="submit" style={styles.button}>OK</button>
             </form>
-          </>
+          </div>
         ) : (
           <div style={styles.profileContainer}>
-            <h3>Мій профіль</h3>
-            <div style={{width: '100%', maxWidth: '300px', marginTop: '20px'}}>
-              <label style={{fontSize: '12px', fontWeight: 'bold'}}>Змінити нікнейм:</label>
-              <input style={{...styles.input, width: '100%', marginTop: '10px', textAlign: 'center'}} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
-            </div>
-            <div style={{display: 'flex', gap: '10px', marginTop: '30px'}}>
-              <button onClick={() => setView('chat')} style={{...styles.button, background: '#ccc'}}>Назад</button>
-              <button onClick={updateProfile} style={styles.button}>Зберегти</button>
-            </div>
+            <h3>Налаштування</h3>
+            <input style={{...styles.input, textAlign: 'center', marginBottom: '10px'}} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
+            <button onClick={async () => {
+              await supabase.auth.updateUser({ data: { display_name: newNickname } });
+              setView('chat');
+            }} style={styles.button}>Зберегти</button>
           </div>
         )}
       </div>
@@ -296,43 +222,27 @@ function App() {
   )
 }
 
-// --- СТИЛІ ---
 const styles = {
-  container: { background: '#f0f2f5', height: '100vh', display: 'flex', fontFamily: 'sans-serif' },
-  sidebar: { width: '280px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' },
-  sidebarHeader: { padding: '20px', borderBottom: '1px solid #eee' },
-  // Оновлена кнопка з ідеальним центруванням плюсика:
-  addGroupBtn: { 
-    background: '#3fcf8e', 
-    color: 'white', 
-    border: 'none', 
-    borderRadius: '50%', 
-    width: '32px', 
-    height: '32px', 
-    cursor: 'pointer', 
-    fontSize: '22px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    lineHeight: '0',
-    paddingBottom: '4px', // Ювелірне центрування символу "+"
-    boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
-  },
-  searchInput: { width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid #ddd', outline: 'none', boxSizing: 'border-box' },
-  searchResults: { background: '#eefaff', padding: '10px', borderRadius: '8px', marginTop: '10px', cursor: 'pointer', color: '#0084ff' },
-  roomItem: { padding: '15px 20px', cursor: 'pointer', fontWeight: '500', borderBottom: '1px solid #f9f9f9' },
-  sidebarFooter: { padding: '15px 20px', borderTop: '1px solid #eee', background: '#fafafa', display: 'flex', justifyContent: 'space-between' },
-  chatWindow: { flex: 1, display: 'flex', flexDirection: 'column', background: 'white' },
-  header: { padding: '18px 25px', background: 'white', borderBottom: '1px solid #eee', fontWeight: 'bold' },
-  messagesList: { flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f9f9f9' },
-  messageBubble: { color: 'white', padding: '10px 15px', maxWidth: '75%' },
-  inputArea: { padding: '20px', display: 'flex', gap: '10px', borderTop: '1px solid #eee' },
-  input: { flex: 1, padding: '12px 18px', borderRadius: '25px', border: '1px solid #ddd', outline: 'none' },
-  button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 25px', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold' },
-  loginBox: { margin: 'auto', background: 'white', padding: '40px', borderRadius: '25px', textAlign: 'center', width: '320px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' },
-  logoutBtnSmall: { color: '#ff4d4d', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px' },
+  container: { background: '#f0f2f5', height: '100dvh', display: 'flex', fontFamily: 'sans-serif', overflow: 'hidden' },
+  sidebar: { width: '260px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0 },
+  sidebarHeader: { padding: '15px', borderBottom: '1px solid #eee' },
+  addGroupBtn: { background: '#3fcf8e', color: 'white', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', paddingBottom: '4px' },
+  searchInput: { width: '100%', padding: '8px', borderRadius: '10px', border: '1px solid #ddd', outline: 'none' },
+  searchResults: { background: '#eefaff', padding: '10px', borderRadius: '8px', marginTop: '10px', cursor: 'pointer', color: '#0084ff', fontSize: '14px' },
+  roomItem: { padding: '12px 15px', cursor: 'pointer', borderBottom: '1px solid #f9f9f9', fontSize: '14px' },
+  sidebarFooter: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', fontSize: '12px' },
+  chatWindow: { flex: 1, position: 'relative', background: 'white', minWidth: 0 },
+  chatFlexWrapper: { display: 'flex', flexDirection: 'column', height: '100%' },
+  header: { padding: '15px', borderBottom: '1px solid #eee', background: 'white', flexShrink: 0 },
+  messagesList: { flex: 1, padding: '15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f9f9f9' },
+  messageBubble: { color: 'white', padding: '8px 12px', maxWidth: '85%', fontSize: '15px' },
+  inputArea: { padding: '10px 15px', display: 'flex', gap: '8px', borderTop: '1px solid #eee', background: 'white', flexShrink: 0, paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
+  input: { flex: 1, padding: '10px 15px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none', fontSize: '16px' },
+  button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold' },
+  loginBox: { margin: 'auto', background: 'white', padding: '30px', borderRadius: '20px', textAlign: 'center', width: '90%', maxWidth: '320px' },
+  logoutBtnSmall: { color: 'red', border: 'none', background: 'none', cursor: 'pointer' },
   toggleText: { cursor: 'pointer', fontSize: '13px', marginTop: '15px', color: '#0084ff', textDecoration: 'underline' },
-  profileContainer: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }
+  profileContainer: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px' }
 }
 
-export default App;
+export default App

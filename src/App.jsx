@@ -4,106 +4,151 @@ import { supabase } from './supabaseClient'
 function App() {
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
-  const [username, setUsername] = useState(localStorage.getItem('chat-username') || '')
-  const [tempName, setTempName] = useState('')
+  const [user, setUser] = useState(null)
+  const [currentRoom, setCurrentRoom] = useState('general')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [view, setView] = useState('chat')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [login, setLogin] = useState('')
+  const [isRegistering, setIsRegistering] = useState(false)
+  const [newNickname, setNewNickname] = useState('')
   const messagesEndRef = useRef(null)
+  
+  // Звук сповіщення
+  const [audio] = useState(new Audio('/notify.mp3'))
 
-  // Функція для красивого форматування часу
-  const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  useEffect(() => {
+    // Запит дозволу на браузерні сповіщення
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission()
+    }
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const currentUser = session?.user ?? null
+      setUser(currentUser)
+      if (currentUser) setNewNickname(currentUser.user_metadata?.display_name || '')
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user ?? null
+      setUser(currentUser)
+      if (currentUser) setNewNickname(currentUser.user_metadata?.display_name || '')
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const startPrivateChat = (targetLogin) => {
+    const myLogin = user.user_metadata?.display_name || user.email;
+    const roomId = [myLogin, targetLogin].sort().join('_');
+    setCurrentRoom(roomId);
+    setSearchQuery('');
+    setView('chat');
   }
 
   const fetchMessages = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .order('created_at', { ascending: true })
-      
-      if (error) throw error
-      if (data) setMessages(data)
-    } catch (err) {
-      console.error('Помилка отримання:', err.message)
-    }
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('room_id', currentRoom)
+      .order('created_at', { ascending: true })
+    if (data) setMessages(data)
   }
 
-  // --- НОВА ФУНКЦІЯ ВИДАЛЕННЯ ---
-  const deleteMessage = async (id) => {
-    try {
-      const { error } = await supabase
-        .from('messages')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      
-      // Оновлюємо стан локально, щоб повідомлення зникло миттєво
-      setMessages((prev) => prev.filter((msg) => msg.id !== id));
-    } catch (err) {
-      console.error('Помилка видалення:', err.message);
-      alert('Не вдалося видалити повідомлення');
-    }
-  }
-
+  // РЕАЛЬНИЙ ЧАС ТА СПОВІЩЕННЯ
   useEffect(() => {
+    if (!user || view !== 'chat') return
+
     fetchMessages()
-    const interval = setInterval(fetchMessages, 3000)
-    return () => clearInterval(interval)
-  }, [])
+
+    // Підписка на нові повідомлення
+    const channel = supabase
+      .channel(`room-${currentRoom}`)
+      .on('postgres_changes', 
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${currentRoom}` }, 
+        (payload) => {
+          const incoming = payload.new
+          const myName = user.user_metadata?.display_name || user.email
+
+          // Якщо пише хтось інший
+          if (incoming.username !== myName) {
+            audio.play().catch(() => {}) // Граємо звук
+            
+            if (Notification.permission === "granted") {
+              new Notification(`Нове від ${incoming.username}`, {
+                body: incoming.messages,
+              })
+            }
+          }
+          
+          setMessages((prev) => [...prev, incoming])
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user, currentRoom, view])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const handleLogin = (e) => {
+  const handleAuth = async (e) => {
     e.preventDefault()
-    if (tempName.trim()) {
-      setUsername(tempName)
-      localStorage.setItem('chat-username', tempName)
+    if (isRegistering) {
+      const { error } = await supabase.auth.signUp({ 
+        email, password, 
+        options: { data: { display_name: login } } 
+      })
+      if (error) alert(error.message)
+      else alert('Успіх! Тепер увійдіть.')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) alert(error.message)
+    }
+  }
+
+  const updateProfile = async (e) => {
+    e.preventDefault()
+    const { error } = await supabase.auth.updateUser({
+      data: { display_name: newNickname }
+    })
+    if (error) alert(error.message)
+    else {
+      alert('Нікнейм оновлено!')
+      setView('chat')
     }
   }
 
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!newMessage.trim()) return
+    const displayName = user.user_metadata?.display_name || user.email
+    
+    const { error } = await supabase.from('messages').insert([{ 
+      messages: newMessage, 
+      username: displayName,
+      room_id: currentRoom 
+    }])
 
-    const textToSend = newMessage
-    setNewMessage('')
-
-    const { error } = await supabase
-      .from('messages')
-      .insert([{ 
-        messages: textToSend, 
-        username: username 
-      }])
-
-    if (error) {
-      alert(`Помилка відправки: ${error.message}`)
-      setNewMessage(textToSend) 
-    } else {
-      fetchMessages()
-    }
+    if (!error) setNewMessage('')
   }
 
-  const logout = () => {
-    localStorage.removeItem('chat-username')
-    setUsername('')
-  }
-
-  if (!username) {
+  if (!user) {
     return (
       <div style={styles.container}>
-        <form onSubmit={handleLogin} style={styles.loginBox}>
-          <h3 style={{ marginTop: 0 }}>Представтеся:</h3>
-          <input 
-            style={styles.input} 
-            value={tempName} 
-            onChange={(e) => setTempName(e.target.value)} 
-            placeholder="Ваше ім'я..." 
-            autoFocus
-          />
-          <button type="submit" style={{...styles.button, marginTop: '15px', width: '100%'}}>Увійти</button>
+        <form onSubmit={handleAuth} style={styles.loginBox}>
+          <h3>{isRegistering ? 'Реєстрація' : 'Вхід'}</h3>
+          {isRegistering && <input style={styles.input} placeholder="Придумайте логін" value={login} onChange={e => setLogin(e.target.value)} required />}
+          <input style={styles.input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+          <input style={styles.input} type="password" placeholder="Пароль" value={password} onChange={e => setPassword(e.target.value)} required />
+          <button type="submit" style={styles.button}>{isRegistering ? 'Створити' : 'Увійти'}</button>
+          <p onClick={() => setIsRegistering(!isRegistering)} style={styles.toggleText}>
+            {isRegistering ? 'Вже є акаунт? Увійти' : 'Немає акаунта? Реєстрація'}
+          </p>
         </form>
       </div>
     )
@@ -111,87 +156,109 @@ function App() {
 
   return (
     <div style={styles.container}>
-      <div style={styles.chatWindow}>
-        <div style={styles.header}>
-          <div>
-            <h2 style={{ margin: 0 }}>Чат 💬</h2>
-            <span style={{ fontSize: '12px', color: '#666' }}>Ви: <b>{username}</b></span>
-          </div>
-          <button onClick={logout} style={styles.logoutBtn}>Вийти</button>
-        </div>
-        
-        <div style={styles.messagesList}>
-          {messages.map((msg) => (
-            <div key={msg.id} style={{
-              ...styles.messageBubble,
-              alignSelf: msg.username === username ? 'flex-end' : 'flex-start',
-              background: msg.username === username ? '#3fcf8e' : '#0084ff',
-              borderRadius: msg.username === username ? '15px 15px 2px 15px' : '15px 15px 15px 2px',
-              position: 'relative' // Важливо для позиціювання кнопки видалення
-            }}>
-              <div style={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '3px', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
-                <span>{msg.username || 'Гість'}</span>
-                <span style={{ opacity: 0.7, fontWeight: 'normal' }}>{formatTime(msg.created_at)}</span>
+      <div style={styles.sidebar}>
+        <div style={styles.sidebarHeader}>
+          <input 
+            style={styles.searchInput} 
+            placeholder="Пошук друга..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <div style={styles.searchResults}>
+              <div onClick={() => startPrivateChat(searchQuery)} style={styles.userItem}>
+                💬 Написати: {searchQuery}
               </div>
-              <div style={{ paddingRight: msg.username === username ? '20px' : '0' }}>
-                {msg.messages}
-              </div>
-              
-              {/* Кнопка видалення (показуємо тільки для твоїх повідомлень) */}
-              {msg.username === username && (
-                <button 
-                  onClick={() => deleteMessage(msg.id)} 
-                  style={styles.deleteBtn}
-                  title="Видалити"
-                >
-                  ×
-                </button>
-              )}
             </div>
-          ))}
-          <div ref={messagesEndRef} />
+          )}
         </div>
 
-        <form onSubmit={sendMessage} style={styles.inputArea}>
-          <input 
-            type="text" 
-            value={newMessage} 
-            onChange={(e) => setNewMessage(e.target.value)} 
-            placeholder="Повідомлення..."
-            style={styles.input}
-          />
-          <button type="submit" style={styles.button}>OK</button>
-        </form>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div 
+            onClick={() => { setCurrentRoom('general'); setView('chat'); }} 
+            style={{...styles.roomItem, background: currentRoom === 'general' && view === 'chat' ? '#eefaff' : 'transparent'}}
+          >
+            # Загальний чат
+          </div>
+        </div>
+
+        <div style={styles.sidebarFooter}>
+          <div onClick={() => setView('profile')} style={styles.profileSummary}>
+            👤 <span>{user.user_metadata?.display_name || 'Профіль'}</span>
+          </div>
+          <button onClick={() => supabase.auth.signOut()} style={styles.logoutBtnSmall}>Вийти</button>
+        </div>
+      </div>
+
+      <div style={styles.chatWindow}>
+        {view === 'chat' ? (
+          <>
+            <div style={styles.header}>
+              <span>Чат: <b>{currentRoom === 'general' ? 'Загальний' : `Діалог: ${currentRoom}`}</b></span>
+            </div>
+            <div style={styles.messagesList}>
+              {messages.map(msg => (
+                <div key={msg.id} style={{
+                  ...styles.messageBubble,
+                  alignSelf: msg.username === (user.user_metadata?.display_name || user.email) ? 'flex-end' : 'flex-start',
+                  background: msg.username === (user.user_metadata?.display_name || user.email) ? '#3fcf8e' : '#0084ff',
+                  borderRadius: msg.username === (user.user_metadata?.display_name || user.email) ? '15px 15px 2px 15px' : '15px 15px 15px 2px'
+                }}>
+                  <div style={{fontSize: '10px', opacity: 0.8, marginBottom: '3px'}}>{msg.username}</div>
+                  <div>{msg.messages}</div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+            <form onSubmit={sendMessage} style={styles.inputArea}>
+              <input style={styles.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Напишіть повідомлення..." />
+              <button type="submit" style={styles.button}>OK</button>
+            </form>
+          </>
+        ) : (
+          <div style={styles.profileContainer}>
+            <h3>Налаштування профілю</h3>
+            <p style={{fontSize: '12px', color: '#666', marginBottom: '20px'}}>{user.email}</p>
+            <div style={{width: '100%', maxWidth: '300px'}}>
+              <label style={{fontSize: '12px', fontWeight: 'bold'}}>Ваш нікнейм:</label>
+              <input 
+                style={{...styles.input, width: '100%', marginTop: '5px', textAlign: 'center'}} 
+                value={newNickname} 
+                onChange={e => setNewNickname(e.target.value)} 
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px', marginTop: '30px'}}>
+              <button onClick={() => setView('chat')} style={{...styles.button, background: '#ccc'}}>Назад</button>
+              <button onClick={updateProfile} style={styles.button}>Зберегти</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
 const styles = {
-  container: { background: '#f0f2f5', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' },
-  loginBox: { background: 'white', padding: '30px', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)', textAlign: 'center' },
-  chatWindow: { width: '100%', maxWidth: '450px', height: '90vh', background: 'white', borderRadius: '20px', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 30px rgba(0,0,0,0.1)', overflow: 'hidden' },
-  header: { padding: '15px 20px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  logoutBtn: { background: 'none', border: 'none', color: '#ff4d4d', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' },
-  messagesList: { flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', background: '#f9f9f9' },
-  messageBubble: { color: 'white', padding: '10px 14px', maxWidth: '80%', wordWrap: 'break-word', minWidth: '60px' },
-  inputArea: { display: 'flex', gap: '10px', padding: '15px 20px', borderTop: '1px solid #eee' },
-  input: { flex: 1, padding: '12px 15px', borderRadius: '25px', border: '1px solid #ddd', outline: 'none' },
+  container: { background: '#f0f2f5', height: '100vh', display: 'flex', fontFamily: 'sans-serif' },
+  sidebar: { width: '260px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' },
+  sidebarHeader: { padding: '15px', borderBottom: '1px solid #eee' },
+  searchInput: { width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid #ddd', outline: 'none', boxSizing: 'border-box' },
+  searchResults: { background: '#f9f9f9', padding: '5px', borderRadius: '5px', marginTop: '5px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' },
+  userItem: { padding: '10px', cursor: 'pointer', borderRadius: '5px', fontSize: '14px', background: '#eefaff', color: '#0084ff' },
+  roomItem: { padding: '15px', cursor: 'pointer', fontWeight: 'bold', borderBottom: '1px solid #f9f9f9' },
+  sidebarFooter: { padding: '15px', borderTop: '1px solid #eee', background: '#fafafa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  profileSummary: { cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '5px', color: '#333' },
+  chatWindow: { flex: 1, display: 'flex', flexDirection: 'column', background: 'white' },
+  header: { padding: '15px 20px', background: 'white', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  messagesList: { flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', background: '#f9f9f9' },
+  messageBubble: { color: 'white', padding: '10px 14px', maxWidth: '75%', wordWrap: 'break-word' },
+  inputArea: { padding: '15px 20px', background: 'white', display: 'flex', gap: '10px', borderTop: '1px solid #eee' },
+  input: { flex: 1, padding: '12px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none' },
   button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 25px', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold' },
-  // Стиль кнопки видалення
-  deleteBtn: {
-    position: 'absolute',
-    right: '8px',
-    bottom: '8px',
-    background: 'none',
-    border: 'none',
-    color: 'rgba(255, 255, 255, 0.6)',
-    cursor: 'pointer',
-    fontSize: '18px',
-    padding: '0',
-    lineHeight: '1',
-    transition: 'color 0.2s'
-  }
+  loginBox: { margin: 'auto', background: 'white', padding: '40px', borderRadius: '20px', textAlign: 'center', width: '320px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' },
+  logoutBtnSmall: { color: '#ff4d4d', border: 'none', background: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' },
+  toggleText: { cursor: 'pointer', fontSize: '12px', marginTop: '15px', color: '#0084ff', textDecoration: 'underline' },
+  profileContainer: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px' }
 }
 
-export default App
+export default App;

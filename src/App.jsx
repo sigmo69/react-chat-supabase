@@ -7,10 +7,12 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [currentRoom, setCurrentRoom] = useState('general');
   const [groups, setGroups] = useState(['general']);
-  const [view, setView] = useState('chat');
+  
+  // Керування екранами: 'list' (список чатів), 'chat' (вікно чату), 'profile' (профіль)
+  const [activeScreen, setActiveScreen] = useState('list'); 
+  
   const [isRegistering, setIsRegistering] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
-  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [login, setLogin] = useState('');
@@ -18,7 +20,6 @@ export default function App() {
   const [groupNameInput, setGroupNameInput] = useState('');
 
   const messagesEndRef = useRef(null);
-  const scrollContainerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -32,7 +33,7 @@ export default function App() {
   }, []);
 
   const fetchMessages = async () => {
-    if (!user) return;
+    if (!user || activeScreen !== 'chat') return;
     const { data } = await supabase
       .from('messages')
       .select('*')
@@ -42,23 +43,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!user || view !== 'chat') return;
     fetchMessages();
     const interval = setInterval(fetchMessages, 3000);
     return () => clearInterval(interval);
-  }, [user, currentRoom, view]);
+  }, [user, currentRoom, activeScreen]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
-
-  // Функція для автоматичного перемикання виду на мобільних після вибору кімнати
-  const selectRoom = (room) => {
-    setCurrentRoom(room);
-    setView('chat');
-    // Прокручуємо до чату (правий бік) на мобільних
-    scrollContainerRef.current?.scrollTo({ left: window.innerWidth, behavior: 'smooth' });
-  };
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -101,136 +93,173 @@ export default function App() {
   }
 
   return (
-    <div style={st.snapContainer} ref={scrollContainerRef}>
-      {/* SIDEBAR (Меню) */}
-      <div style={st.sidebar}>
-        <div style={st.sidebarTop}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-            <b>Чати</b>
+    <div style={st.appFrame}>
+      
+      {/* 1. ЕКРАН СПИСКУ ЧАТІВ */}
+      {activeScreen === 'list' && (
+        <div style={st.screen}>
+          <div style={st.header}>
+            <b>Messenger</b>
             <button onClick={() => setIsCreatingGroup(!isCreatingGroup)} style={st.plusBtn}>+</button>
           </div>
-          {isCreatingGroup && (
-            <div style={{marginTop:'10px', display:'flex', gap:'5px'}}>
-              <input style={st.inputSmall} placeholder="Назва" onChange={e => setGroupNameInput(e.target.value)} />
-              <button onClick={() => {
-                const name = groupNameInput.trim().toLowerCase();
-                if(name) { setGroups([...groups, name]); selectRoom(name); setIsCreatingGroup(false); }
-              }} style={st.btnSmall}>OK</button>
-            </div>
-          )}
-        </div>
-        <div style={st.roomsList}>
-          {groups.map(g => (
-            <div key={g} onClick={() => selectRoom(g)} 
-                 style={{...st.roomItem, background: currentRoom === g && view === 'chat' ? '#eefaff' : 'transparent'}}>
-              # {g}
-            </div>
-          ))}
-        </div>
-        <div style={st.sidebarBottom}>
-          <span onClick={() => { setView('profile'); scrollContainerRef.current?.scrollTo({ left: window.innerWidth, behavior: 'smooth' }); }} style={{cursor:'pointer'}}>⚙️ Профіль</span>
-          <button onClick={() => supabase.auth.signOut()} style={st.logout}>Вийти</button>
-        </div>
-      </div>
-
-      {/* ОСНОВНЕ ВІКНО (Чат) */}
-      <div style={st.main}>
-        {view === 'chat' ? (
-          <div style={st.chatWrapper}>
-            <div style={st.header}>
-               <span style={{fontSize: '12px', color: '#999'}}>← Свайп вправо для меню</span>
-               <div style={{marginTop: '5px'}}>#{currentRoom}</div>
-            </div>
-            <div style={st.msgArea}>
-              {messages.map(m => (
-                <div key={m.id} style={{
-                  ...st.bubble,
-                  alignSelf: m.username === (user.user_metadata?.display_name || user.email) ? 'flex-end' : 'flex-start',
-                  background: m.username === (user.user_metadata?.display_name || user.email) ? '#3fcf8e' : '#0084ff'
-                }}>
-                  <span style={st.msgUser}>{m.username}</span>
-                  {m.messages}
+          
+          <div style={st.content}>
+            {isCreatingGroup && (
+              <div style={st.createGroupBar}>
+                <input style={st.inputSmall} placeholder="Назва кімнати" onChange={e => setGroupNameInput(e.target.value)} />
+                <button onClick={() => {
+                  const name = groupNameInput.trim().toLowerCase();
+                  if(name) { setGroups([...groups, name]); setIsCreatingGroup(false); }
+                }} style={st.btnSmall}>Створити</button>
+              </div>
+            )}
+            
+            {groups.map(g => (
+              <div key={g} onClick={() => { setCurrentRoom(g); setActiveScreen('chat'); }} style={st.roomItem}>
+                <div style={st.avatar}>{g[0].toUpperCase()}</div>
+                <div style={st.roomInfo}>
+                  <div style={st.roomName}># {g}</div>
+                  <div style={st.roomLastMsg}>Натисніть, щоб відкрити чат</div>
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-            <form onSubmit={sendMessage} style={st.inputBar}>
-              <input style={st.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Повідомлення..." />
-              <button type="submit" style={st.btn}>OK</button>
-            </form>
+              </div>
+            ))}
           </div>
-        ) : (
-          <div style={st.profileScreen}>
-            <h3>Налаштування</h3>
-            <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
+
+          <div style={st.footer}>
+            <span onClick={() => setActiveScreen('profile')} style={{cursor:'pointer'}}>⚙️ Профіль</span>
+            <button onClick={() => supabase.auth.signOut()} style={st.logout}>Вийти</button>
+          </div>
+        </div>
+      )}
+
+      {/* 2. ЕКРАН ЧАТУ */}
+      {activeScreen === 'chat' && (
+        <div style={st.screen}>
+          <div style={st.header}>
+            <button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button>
+            <div style={{marginLeft: '15px'}}>
+              <b>{currentRoom}</b>
+              <div style={{fontSize: '10px', color: '#3fcf8e'}}>онлайн</div>
+            </div>
+          </div>
+          
+          <div style={st.msgArea}>
+            {messages.map(m => (
+              <div key={m.id} style={{
+                ...st.bubble,
+                alignSelf: m.username === (user.user_metadata?.display_name || user.email) ? 'flex-end' : 'flex-start',
+                background: m.username === (user.user_metadata?.display_name || user.email) ? '#3fcf8e' : '#fff',
+                color: m.username === (user.user_metadata?.display_name || user.email) ? '#fff' : '#000',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+              }}>
+                <span style={{...st.msgUser, color: m.username === (user.user_metadata?.display_name || user.email) ? '#eee' : '#3fcf8e'}}>
+                  {m.username}
+                </span>
+                {m.messages}
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form onSubmit={sendMessage} style={st.inputBar}>
+            <input style={st.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Повідомлення..." />
+            <button type="submit" style={st.sendBtn}>➤</button>
+          </form>
+        </div>
+      )}
+
+      {/* 3. ЕКРАН ПРОФІЛЮ */}
+      {activeScreen === 'profile' && (
+        <div style={st.screen}>
+          <div style={st.header}>
+            <button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button>
+            <b style={{marginLeft: '15px'}}>Профіль</b>
+          </div>
+          <div style={st.profileContent}>
+            <div style={st.bigAvatar}>{newNickname[0]?.toUpperCase() || 'U'}</div>
+            <input style={{...st.input, textAlign: 'center', width: '80%'}} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
             <button onClick={async () => {
               await supabase.auth.updateUser({ data: { display_name: newNickname } });
-              setView('chat');
-            }} style={{...st.btn, marginTop:'10px'}}>Зберегти</button>
-            <button onClick={() => setView('chat')} style={{marginTop: '20px', background: 'none', border: 'none', color: '#0084ff'}}>Назад до чату</button>
+              alert('Збережено!');
+              setActiveScreen('list');
+            }} style={{...st.btn, marginTop: '20px', width: '80%'}}>Зберегти зміни</button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const st = {
-  // ФІКС: Контейнер, який дозволяє гортати вліво-вправо
-  snapContainer: {
-    display: 'flex',
+  appFrame: {
     width: '100vw',
     height: '100dvh',
-    overflowX: 'auto', // Дозволяє горизонтальний скрол
-    overflowY: 'hidden', // Забороняє вертикальний скрол всього екрана
-    scrollSnapType: 'x mandatory', // "Магнітний" ефект свайпу
-    WebkitOverflowScrolling: 'touch',
-    background: '#f0f2f5'
+    background: '#f0f2f5',
+    overflow: 'hidden',
+    position: 'fixed'
   },
-  sidebar: { 
-    minWidth: '260px', // Фіксована ширина меню
-    width: '80vw', // На мобільних меню займає 80% екрана
-    height: '100%',
-    background: '#fff', 
-    borderRight: '1px solid #ddd', 
-    display: 'flex', 
-    flexDirection: 'column',
-    scrollSnapAlign: 'start', // Магніт для меню
-  },
-  main: { 
-    minWidth: '100vw', // Чат завжди на весь екран
-    height: '100%',
-    background: '#fff', 
-    scrollSnapAlign: 'start', // Магніт для чату
+  screen: {
     display: 'flex',
-    flexDirection: 'column'
+    flexDirection: 'column',
+    width: '100%',
+    height: '100%',
+    background: '#f0f2f5',
+    position: 'absolute',
+    top: 0,
+    left: 0
   },
-  chatWrapper: { display: 'flex', flexDirection: 'column', height: '100%', width: '100%' },
-  header: { padding: '10px 15px', borderBottom: '1px solid #eee', fontWeight: 'bold', background: '#fff' },
+  header: {
+    padding: '12px 15px',
+    background: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    borderBottom: '1px solid #ddd',
+    flexShrink: 0
+  },
+  content: { flex: 1, overflowY: 'auto' },
   msgArea: { 
     flex: 1, 
     overflowY: 'auto', 
     padding: '15px', 
     display: 'flex', 
     flexDirection: 'column', 
-    gap: '8px', 
-    background: '#f9f9f9',
+    gap: '10px',
+    background: '#e5ddd5' // Колір фону як у месенджерах
   },
-  inputBar: { padding: '10px', display: 'flex', gap: '5px', borderTop: '1px solid #eee', background: '#fff', paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
-  bubble: { color: 'white', padding: '8px 12px', borderRadius: '15px', maxWidth: '85%' },
-  msgUser: { display: 'block', fontSize: '10px', opacity: 0.8, marginBottom: '2px' },
-  input: { flex: 1, padding: '10px', borderRadius: '20px', border: '1px solid #ccc', fontSize: '16px', outline: 'none' },
-  btn: { padding: '10px 20px', background: '#3fcf8e', color: 'white', border: 'none', borderRadius: '20px', fontWeight: 'bold' },
-  plusBtn: { width: '32px', height: '32px', borderRadius: '50%', border: 'none', background: '#3fcf8e', color: 'white', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  sidebarTop: { padding: '15px', borderBottom: '1px solid #eee' },
-  roomsList: { flex: 1, overflowY: 'auto', padding: '10px' },
-  roomItem: { padding: '12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '5px' },
-  sidebarBottom: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  authWrapper: { display: 'flex', height: '100dvh', background: '#f0f2f5' },
-  loginBox: { margin: 'auto', padding: '30px', background: '#fff', borderRadius: '15px', display: 'flex', flexDirection: 'column', gap: '15px', width: '280px', textAlign: 'center' },
-  logout: { border: 'none', background: 'none', color: 'red', cursor: 'pointer', fontSize: '12px' },
-  profileScreen: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' },
-  link: { color: '#0084ff', cursor: 'pointer', fontSize: '12px' },
-  inputSmall: { flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #ccc' },
-  btnSmall: { padding: '8px 12px', background: '#3fcf8e', color: '#fff', border: 'none', borderRadius: '8px' }
+  footer: { padding: '15px', background: '#fff', borderTop: '1px solid #ddd', display: 'flex', justifyContent: 'space-between' },
+  
+  roomItem: { 
+    display: 'flex', 
+    alignItems: 'center', 
+    padding: '12px 15px', 
+    background: '#fff', 
+    borderBottom: '1px solid #f0f0f0',
+    cursor: 'pointer' 
+  },
+  avatar: { width: '45px', height: '45px', borderRadius: '50%', background: '#3fcf8e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '18px' },
+  roomInfo: { marginLeft: '15px' },
+  roomName: { fontWeight: 'bold', fontSize: '16px' },
+  roomLastMsg: { fontSize: '12px', color: '#888' },
+
+  backBtn: { background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#3fcf8e' },
+  plusBtn: { marginLeft: 'auto', background: 'none', border: 'none', fontSize: '24px', color: '#3fcf8e', cursor: 'pointer' },
+  
+  bubble: { padding: '8px 12px', borderRadius: '12px', maxWidth: '85%', fontSize: '15px', position: 'relative' },
+  msgUser: { display: 'block', fontSize: '10px', fontWeight: 'bold', marginBottom: '2px' },
+  
+  inputBar: { padding: '10px', display: 'flex', gap: '10px', background: '#fff', alignItems: 'center', paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
+  input: { flex: 1, padding: '10px 15px', borderRadius: '20px', border: '1px solid #ddd', fontSize: '16px', outline: 'none' },
+  sendBtn: { background: '#3fcf8e', color: '#fff', border: 'none', width: '40px', height: '40px', borderRadius: '50%', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  
+  btn: { padding: '12px', background: '#3fcf8e', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 'bold' },
+  authWrapper: { display: 'flex', height: '100dvh', background: '#f0f2f5', width: '100vw' },
+  loginBox: { margin: 'auto', padding: '30px', background: '#fff', borderRadius: '20px', display: 'flex', flexDirection: 'column', gap: '15px', width: '280px', textAlign: 'center' },
+  link: { color: '#0084ff', cursor: 'pointer', fontSize: '13px' },
+  logout: { color: 'red', border: 'none', background: 'none', cursor: 'pointer' },
+  
+  profileContent: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px' },
+  bigAvatar: { width: '80px', height: '80px', borderRadius: '50%', background: '#3fcf8e', color: '#fff', fontSize: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' },
+  createGroupBar: { padding: '15px', background: '#fff', borderBottom: '1px solid #ddd', display: 'flex', gap: '10px' },
+  inputSmall: { flex: 1, padding: '8px', border: '1px solid #ddd', borderRadius: '5px' },
+  btnSmall: { padding: '8px', background: '#3fcf8e', color: '#fff', border: 'none', borderRadius: '5px' }
 };

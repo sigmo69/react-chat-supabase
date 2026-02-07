@@ -2,27 +2,32 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from './supabaseClient'
 
 function App() {
+  // --- ДАНІ ТА СТАН ---
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [user, setUser] = useState(null)
   const [currentRoom, setCurrentRoom] = useState('general')
-  const [groups, setGroups] = useState(['general']) // Список груп
+  const [groups, setGroups] = useState(['general'])
+  
+  // --- UI СТАН ---
+  const [view, setView] = useState('chat') 
   const [isCreatingGroup, setIsCreatingGroup] = useState(false)
   const [groupNameInput, setGroupNameInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [view, setView] = useState('chat')
+  const [isRegistering, setIsRegistering] = useState(false)
+  
+  // --- ПОЛЯ ФОРМ ---
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [login, setLogin] = useState('')
-  const [isRegistering, setIsRegistering] = useState(false)
   const [newNickname, setNewNickname] = useState('')
-  const messagesEndRef = useRef(null)
-  const [audio] = useState(new Audio('/notify.mp3'))
 
+  const messagesEndRef = useRef(null)
+  const audioRef = useRef(null)
+
+  // --- 1. ІНІЦІАЛІЗАЦІЯ ---
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission()
-    }
+    audioRef.current = new Audio('/notify.mp3')
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user ?? null
@@ -39,39 +44,23 @@ function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Функція створення групи
-  const createGroup = () => {
-    const name = groupNameInput.trim().toLowerCase()
-    if (name && !groups.includes(name)) {
-      setGroups([...groups, name])
-      setCurrentRoom(name)
-      setGroupNameInput('')
-      setIsCreatingGroup(false)
-      setView('chat')
-    }
-  }
-
-  const startPrivateChat = (targetLogin) => {
-    const myLogin = user.user_metadata?.display_name || user.email;
-    const roomId = [myLogin, targetLogin].sort().join('_');
-    if (!groups.includes(roomId)) setGroups([...groups, roomId])
-    setCurrentRoom(roomId);
-    setSearchQuery('');
-    setView('chat');
-  }
-
+  // --- 2. ЛОГІКА ПОВІДОМЛЕНЬ ---
   const fetchMessages = async () => {
-    const { data } = await supabase
+    if (!user) return
+    const { data, error } = await supabase
       .from('messages')
       .select('*')
       .eq('room_id', currentRoom)
       .order('created_at', { ascending: true })
-    if (data) setMessages(data)
+    
+    if (!error && data) setMessages(data)
   }
 
   useEffect(() => {
     if (!user || view !== 'chat') return
+
     fetchMessages()
+    const interval = setInterval(fetchMessages, 3000)
 
     const channel = supabase
       .channel(`room-${currentRoom}`)
@@ -81,121 +70,194 @@ function App() {
           const incoming = payload.new
           const myName = user.user_metadata?.display_name || user.email
           if (incoming.username !== myName) {
-            audio.play().catch(() => {})
-            if (Notification.permission === "granted") {
-              new Notification(`Група ${currentRoom}: ${incoming.username}`, { body: incoming.messages })
-            }
+            audioRef.current?.play().catch(() => {})
           }
-          setMessages((prev) => [...prev, incoming])
+          setMessages((prev) => prev.find(m => m.id === incoming.id) ? prev : [...prev, incoming])
         }
       )
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      clearInterval(interval)
+      supabase.removeChannel(channel)
+    }
   }, [user, currentRoom, view])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // --- 3. ФУНКЦІЇ ---
+  const handleAuth = async (e) => {
+    e.preventDefault()
+    if (isRegistering) {
+      const { error } = await supabase.auth.signUp({ 
+        email, password, options: { data: { display_name: login } } 
+      })
+      if (error) alert(error.message)
+      else alert('Реєстрація успішна! Тепер увійдіть.')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) alert(error.message)
+    }
+  }
+
+  const updateProfile = async () => {
+    const { error } = await supabase.auth.updateUser({
+      data: { display_name: newNickname }
+    })
+    if (error) alert(error.message)
+    else {
+      alert('Дані оновлено!')
+      setView('chat')
+    }
+  }
+
+  const createGroup = () => {
+    const name = groupNameInput.trim().toLowerCase()
+    if (name && !groups.includes(name)) {
+      setGroups(prev => [...prev, name])
+      setCurrentRoom(name)
+      setGroupNameInput('')
+      setIsCreatingGroup(false)
+    }
+  }
+
+  const startPrivateChat = (targetLogin) => {
+    const myLogin = user.user_metadata?.display_name || user.email
+    const roomId = [myLogin, targetLogin].sort().join('_')
+    if (!groups.includes(roomId)) setGroups(prev => [...prev, roomId])
+    setCurrentRoom(roomId)
+    setSearchQuery('')
+    setView('chat')
+  }
+
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!newMessage.trim()) return
-    const displayName = user.user_metadata?.display_name || user.email
-    const { error } = await supabase.from('messages').insert([{ 
+    const name = user.user_metadata?.display_name || user.email
+    await supabase.from('messages').insert([{ 
       messages: newMessage, 
-      username: displayName,
+      username: name, 
       room_id: currentRoom 
     }])
-    if (!error) setNewMessage('')
+    setNewMessage('')
+    fetchMessages()
   }
 
+  // --- РЕНДЕР: ВХІД ---
   if (!user) {
     return (
       <div style={styles.container}>
-        <form onSubmit={(e) => {
-          e.preventDefault()
-          if (isRegistering) {
-            supabase.auth.signUp({ email, password, options: { data: { display_name: login } } })
-          } else {
-            supabase.auth.signInWithPassword({ email, password })
-          }
-        }} style={styles.loginBox}>
-          <h3>{isRegistering ? 'Реєстрація' : 'Вхід'}</h3>
-          {isRegistering && <input style={styles.input} placeholder="Логін" value={login} onChange={e => setLogin(e.target.value)} required />}
-          <input style={styles.input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
-          <input style={styles.input} type="password" placeholder="Пароль" value={password} onChange={e => setPassword(e.target.value)} required />
-          <button type="submit" style={styles.button}>{isRegistering ? 'Створити' : 'Увійти'}</button>
-          <p onClick={() => setIsRegistering(!isRegistering)} style={styles.toggleText}>Змінити режим</p>
+        <form onSubmit={handleAuth} style={styles.loginBox}>
+          <h2 style={{ color: '#3fcf8e', marginBottom: '20px' }}>
+            {isRegistering ? 'Створити акаунт' : 'Вхід у чат'}
+          </h2>
+          
+          {isRegistering && (
+            <input 
+              style={styles.input} 
+              placeholder="Придумайте логін (нікнейм)" 
+              value={login} 
+              onChange={e => setLogin(e.target.value)} 
+              required 
+            />
+          )}
+          
+          <input 
+            style={styles.input} 
+            type="email" 
+            placeholder="Ваш Email" 
+            value={email} 
+            onChange={e => setEmail(e.target.value)} 
+            required 
+          />
+          
+          <input 
+            style={styles.input} 
+            type="password" 
+            placeholder="Пароль" 
+            value={password} 
+            onChange={e => setPassword(e.target.value)} 
+            required 
+          />
+          
+          <button type="submit" style={styles.button}>
+            {isRegistering ? 'Зареєструватися' : 'Увійти'}
+          </button>
+          
+          <p 
+            onClick={() => setIsRegistering(!isRegistering)} 
+            style={styles.toggleText}
+          >
+            {isRegistering ? 'Вже є акаунт? Увійти' : 'Немає акаунта? Зареєструватися'}
+          </p>
         </form>
       </div>
     )
   }
 
+  // --- РЕНДЕР: ДОДАТОК ---
   return (
     <div style={styles.container}>
-      {/* SIDEBAR */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarHeader}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px'}}>
             <b style={{fontSize: '18px'}}>Чати</b>
-            <button onClick={() => setIsCreatingGroup(!isCreatingGroup)} style={styles.addGroupBtn}>+</button>
+            <button 
+              onClick={() => setIsCreatingGroup(!isCreatingGroup)} 
+              style={styles.addGroupBtn}
+            >
+              +
+            </button>
           </div>
           
           {isCreatingGroup && (
-            <div style={{marginBottom: '10px'}}>
-              <input 
-                style={styles.searchInput} 
-                placeholder="Назва групи..." 
-                value={groupNameInput}
-                onChange={e => setGroupNameInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && createGroup()}
-              />
-              <button onClick={createGroup} style={{...styles.button, width: '100%', marginTop: '5px', padding: '5px'}}>Створити</button>
+            <div style={{display: 'flex', gap: '5px', marginBottom: '10px'}}>
+              <input style={{...styles.input, padding: '8px'}} placeholder="Назва групи" value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} />
+              <button onClick={createGroup} style={{...styles.button, padding: '5px 10px'}}>OK</button>
             </div>
           )}
 
           <input 
             style={styles.searchInput} 
-            placeholder="Пошук друга..." 
+            placeholder="Знайти друга..." 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
           {searchQuery && (
-            <div style={styles.searchResults}>
-              <div onClick={() => startPrivateChat(searchQuery)} style={styles.userItem}>
-                💬 Написати: {searchQuery}
-              </div>
+            <div style={styles.searchResults} onClick={() => startPrivateChat(searchQuery)}>
+              👤 Почати чат з <b>{searchQuery}</b>
             </div>
           )}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          {groups.map(group => (
+          {groups.map(g => (
             <div 
-              key={group}
-              onClick={() => { setCurrentRoom(group); setView('chat'); }} 
-              style={{...styles.roomItem, background: currentRoom === group && view === 'chat' ? '#eefaff' : 'transparent'}}
+              key={g} 
+              onClick={() => { setCurrentRoom(g); setView('chat'); }} 
+              style={{...styles.roomItem, background: currentRoom === g && view === 'chat' ? '#eefaff' : 'transparent'}}
             >
-              # {group}
+              {g.includes('_') ? `👤 ${g.replace(user.user_metadata?.display_name || '', '').replace('_', '')}` : `# ${g}`}
             </div>
           ))}
         </div>
 
         <div style={styles.sidebarFooter}>
-          <div onClick={() => setView('profile')} style={styles.profileSummary}>
-            👤 <span>{user.user_metadata?.display_name || 'Профіль'}</span>
+          <div onClick={() => setView('profile')} style={{cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px'}}>
+            <span>⚙️</span>
+            <span style={{fontWeight: 'bold'}}>{user.user_metadata?.display_name || 'Профіль'}</span>
           </div>
           <button onClick={() => supabase.auth.signOut()} style={styles.logoutBtnSmall}>Вийти</button>
         </div>
       </div>
 
-      {/* MAIN */}
       <div style={styles.chatWindow}>
         {view === 'chat' ? (
           <>
             <div style={styles.header}>
-              <span>Група: <b>{currentRoom}</b></span>
+              <span>{currentRoom.includes('_') ? 'Приватна бесіда' : `Група: #${currentRoom}`}</span>
             </div>
             <div style={styles.messagesList}>
               {messages.map(msg => (
@@ -212,20 +274,21 @@ function App() {
               <div ref={messagesEndRef} />
             </div>
             <form onSubmit={sendMessage} style={styles.inputArea}>
-              <input style={styles.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Напишіть у групу..." />
+              <input style={styles.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Напишіть щось..." />
               <button type="submit" style={styles.button}>OK</button>
             </form>
           </>
         ) : (
           <div style={styles.profileContainer}>
-            <h3>Профіль</h3>
-            <input 
-              style={{...styles.input, textAlign: 'center', marginTop: '10px'}} 
-              value={newNickname} 
-              onChange={e => setNewNickname(e.target.value)} 
-            />
-            <button onClick={updateProfile} style={{...styles.button, marginTop: '10px'}}>Зберегти</button>
-            <button onClick={() => setView('chat')} style={{...styles.button, background: '#ccc', marginTop: '10px'}}>Назад</button>
+            <h3>Мій профіль</h3>
+            <div style={{width: '100%', maxWidth: '300px', marginTop: '20px'}}>
+              <label style={{fontSize: '12px', fontWeight: 'bold'}}>Змінити нікнейм:</label>
+              <input style={{...styles.input, width: '100%', marginTop: '10px', textAlign: 'center'}} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
+            </div>
+            <div style={{display: 'flex', gap: '10px', marginTop: '30px'}}>
+              <button onClick={() => setView('chat')} style={{...styles.button, background: '#ccc'}}>Назад</button>
+              <button onClick={updateProfile} style={styles.button}>Зберегти</button>
+            </div>
           </div>
         )}
       </div>
@@ -233,28 +296,43 @@ function App() {
   )
 }
 
+// --- СТИЛІ ---
 const styles = {
   container: { background: '#f0f2f5', height: '100vh', display: 'flex', fontFamily: 'sans-serif' },
-  sidebar: { width: '260px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' },
-  sidebarHeader: { padding: '15px', borderBottom: '1px solid #eee' },
-  addGroupBtn: { background: '#3fcf8e', color: 'white', border: 'none', borderRadius: '50%', width: '30px', height: '30px', cursor: 'pointer', fontSize: '20px' },
+  sidebar: { width: '280px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' },
+  sidebarHeader: { padding: '20px', borderBottom: '1px solid #eee' },
+  // Оновлена кнопка з ідеальним центруванням плюсика:
+  addGroupBtn: { 
+    background: '#3fcf8e', 
+    color: 'white', 
+    border: 'none', 
+    borderRadius: '50%', 
+    width: '32px', 
+    height: '32px', 
+    cursor: 'pointer', 
+    fontSize: '22px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    lineHeight: '0',
+    paddingBottom: '4px', // Ювелірне центрування символу "+"
+    boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
+  },
   searchInput: { width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid #ddd', outline: 'none', boxSizing: 'border-box' },
-  searchResults: { background: '#f9f9f9', padding: '5px', borderRadius: '5px', marginTop: '5px' },
-  userItem: { padding: '10px', cursor: 'pointer', borderRadius: '5px', color: '#0084ff' },
-  roomItem: { padding: '15px', cursor: 'pointer', fontWeight: 'bold', borderBottom: '1px solid #f9f9f9' },
-  sidebarFooter: { padding: '15px', borderTop: '1px solid #eee', background: '#fafafa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  profileSummary: { cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' },
+  searchResults: { background: '#eefaff', padding: '10px', borderRadius: '8px', marginTop: '10px', cursor: 'pointer', color: '#0084ff' },
+  roomItem: { padding: '15px 20px', cursor: 'pointer', fontWeight: '500', borderBottom: '1px solid #f9f9f9' },
+  sidebarFooter: { padding: '15px 20px', borderTop: '1px solid #eee', background: '#fafafa', display: 'flex', justifyContent: 'space-between' },
   chatWindow: { flex: 1, display: 'flex', flexDirection: 'column', background: 'white' },
-  header: { padding: '15px 20px', background: 'white', borderBottom: '1px solid #eee' },
-  messagesList: { flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', background: '#f9f9f9' },
-  messageBubble: { color: 'white', padding: '10px 14px', maxWidth: '75%' },
-  inputArea: { padding: '15px 20px', display: 'flex', gap: '10px', borderTop: '1px solid #eee' },
-  input: { flex: 1, padding: '12px', borderRadius: '20px', border: '1px solid #ddd' },
+  header: { padding: '18px 25px', background: 'white', borderBottom: '1px solid #eee', fontWeight: 'bold' },
+  messagesList: { flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f9f9f9' },
+  messageBubble: { color: 'white', padding: '10px 15px', maxWidth: '75%' },
+  inputArea: { padding: '20px', display: 'flex', gap: '10px', borderTop: '1px solid #eee' },
+  input: { flex: 1, padding: '12px 18px', borderRadius: '25px', border: '1px solid #ddd', outline: 'none' },
   button: { background: '#3fcf8e', color: 'white', border: 'none', padding: '10px 25px', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold' },
-  loginBox: { margin: 'auto', background: 'white', padding: '40px', borderRadius: '20px', textAlign: 'center', width: '320px' },
-  logoutBtnSmall: { color: '#ff4d4d', border: 'none', background: 'none', cursor: 'pointer', fontSize: '12px' },
-  toggleText: { cursor: 'pointer', fontSize: '12px', marginTop: '15px', color: '#0084ff' },
+  loginBox: { margin: 'auto', background: 'white', padding: '40px', borderRadius: '25px', textAlign: 'center', width: '320px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' },
+  logoutBtnSmall: { color: '#ff4d4d', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px' },
+  toggleText: { cursor: 'pointer', fontSize: '13px', marginTop: '15px', color: '#0084ff', textDecoration: 'underline' },
   profileContainer: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }
 }
 
-export default App
+export default App;

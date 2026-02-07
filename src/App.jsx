@@ -18,6 +18,7 @@ export default function App() {
   const [groupNameInput, setGroupNameInput] = useState('');
 
   const messagesEndRef = useRef(null);
+  const scrollContainerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -50,6 +51,14 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
+
+  // Функція для автоматичного перемикання виду на мобільних після вибору кімнати
+  const selectRoom = (room) => {
+    setCurrentRoom(room);
+    setView('chat');
+    // Прокручуємо до чату (правий бік) на мобільних
+    scrollContainerRef.current?.scrollTo({ left: window.innerWidth, behavior: 'smooth' });
+  };
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -92,8 +101,8 @@ export default function App() {
   }
 
   return (
-    <div style={st.screen}>
-      {/* SIDEBAR - тепер він має горизонтальний скрол на мобільних, якщо потрібно */}
+    <div style={st.snapContainer} ref={scrollContainerRef}>
+      {/* SIDEBAR (Меню) */}
       <div style={st.sidebar}>
         <div style={st.sidebarTop}>
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
@@ -105,30 +114,33 @@ export default function App() {
               <input style={st.inputSmall} placeholder="Назва" onChange={e => setGroupNameInput(e.target.value)} />
               <button onClick={() => {
                 const name = groupNameInput.trim().toLowerCase();
-                if(name) { setGroups([...groups, name]); setCurrentRoom(name); setIsCreatingGroup(false); }
+                if(name) { setGroups([...groups, name]); selectRoom(name); setIsCreatingGroup(false); }
               }} style={st.btnSmall}>OK</button>
             </div>
           )}
         </div>
         <div style={st.roomsList}>
           {groups.map(g => (
-            <div key={g} onClick={() => { setCurrentRoom(g); setView('chat'); }} 
+            <div key={g} onClick={() => selectRoom(g)} 
                  style={{...st.roomItem, background: currentRoom === g && view === 'chat' ? '#eefaff' : 'transparent'}}>
               # {g}
             </div>
           ))}
         </div>
         <div style={st.sidebarBottom}>
-          <span onClick={() => setView('profile')} style={{cursor:'pointer'}}>⚙️ Профіль</span>
+          <span onClick={() => { setView('profile'); scrollContainerRef.current?.scrollTo({ left: window.innerWidth, behavior: 'smooth' }); }} style={{cursor:'pointer'}}>⚙️ Профіль</span>
           <button onClick={() => supabase.auth.signOut()} style={st.logout}>Вийти</button>
         </div>
       </div>
 
-      {/* ОСНОВНЕ ВІКНО */}
+      {/* ОСНОВНЕ ВІКНО (Чат) */}
       <div style={st.main}>
         {view === 'chat' ? (
           <div style={st.chatWrapper}>
-            <div style={st.header}>#{currentRoom}</div>
+            <div style={st.header}>
+               <span style={{fontSize: '12px', color: '#999'}}>← Свайп вправо для меню</span>
+               <div style={{marginTop: '5px'}}>#{currentRoom}</div>
+            </div>
             <div style={st.msgArea}>
               {messages.map(m => (
                 <div key={m.id} style={{
@@ -149,12 +161,13 @@ export default function App() {
           </div>
         ) : (
           <div style={st.profileScreen}>
-            <h3>Профіль</h3>
+            <h3>Налаштування</h3>
             <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
             <button onClick={async () => {
               await supabase.auth.updateUser({ data: { display_name: newNickname } });
               setView('chat');
             }} style={{...st.btn, marginTop:'10px'}}>Зберегти</button>
+            <button onClick={() => setView('chat')} style={{marginTop: '20px', background: 'none', border: 'none', color: '#0084ff'}}>Назад до чату</button>
           </div>
         )}
       </div>
@@ -163,33 +176,37 @@ export default function App() {
 }
 
 const st = {
-  // ФІКС: Забороняємо будь-який рух вгору-вниз для всього екрана
-  screen: { 
-    display: 'flex', 
-    width: '100vw', 
-    height: '100dvh', 
-    position: 'fixed', 
-    top: 0, 
-    left: 0, 
-    overflow: 'hidden', // ВАЖЛИВО: жодних рухів всього екрана
-    touchAction: 'none' // Забороняє браузерні жести прокрутки
+  // ФІКС: Контейнер, який дозволяє гортати вліво-вправо
+  snapContainer: {
+    display: 'flex',
+    width: '100vw',
+    height: '100dvh',
+    overflowX: 'auto', // Дозволяє горизонтальний скрол
+    overflowY: 'hidden', // Забороняє вертикальний скрол всього екрана
+    scrollSnapType: 'x mandatory', // "Магнітний" ефект свайпу
+    WebkitOverflowScrolling: 'touch',
+    background: '#f0f2f5'
   },
   sidebar: { 
-    width: '240px', 
+    minWidth: '260px', // Фіксована ширина меню
+    width: '80vw', // На мобільних меню займає 80% екрана
+    height: '100%',
     background: '#fff', 
     borderRight: '1px solid #ddd', 
     display: 'flex', 
     flexDirection: 'column',
-    touchAction: 'pan-y' // Дозволяє скрол тільки всередині сайдбара
+    scrollSnapAlign: 'start', // Магніт для меню
   },
   main: { 
-    flex: 1, 
+    minWidth: '100vw', // Чат завжди на весь екран
+    height: '100%',
     background: '#fff', 
-    position: 'relative',
-    touchAction: 'none' 
+    scrollSnapAlign: 'start', // Магніт для чату
+    display: 'flex',
+    flexDirection: 'column'
   },
-  chatWrapper: { display: 'flex', flexDirection: 'column', height: '100%' },
-  header: { padding: '15px', borderBottom: '1px solid #eee', fontWeight: 'bold', flexShrink: 0 },
+  chatWrapper: { display: 'flex', flexDirection: 'column', height: '100%', width: '100%' },
+  header: { padding: '10px 15px', borderBottom: '1px solid #eee', fontWeight: 'bold', background: '#fff' },
   msgArea: { 
     flex: 1, 
     overflowY: 'auto', 
@@ -198,23 +215,22 @@ const st = {
     flexDirection: 'column', 
     gap: '8px', 
     background: '#f9f9f9',
-    touchAction: 'pan-y' // Дозволяє скрол тільки повідомленням
   },
-  inputBar: { padding: '10px', display: 'flex', gap: '5px', borderTop: '1px solid #eee', background: '#fff', flexShrink: 0 },
+  inputBar: { padding: '10px', display: 'flex', gap: '5px', borderTop: '1px solid #eee', background: '#fff', paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
   bubble: { color: 'white', padding: '8px 12px', borderRadius: '15px', maxWidth: '85%' },
   msgUser: { display: 'block', fontSize: '10px', opacity: 0.8, marginBottom: '2px' },
   input: { flex: 1, padding: '10px', borderRadius: '20px', border: '1px solid #ccc', fontSize: '16px', outline: 'none' },
   btn: { padding: '10px 20px', background: '#3fcf8e', color: 'white', border: 'none', borderRadius: '20px', fontWeight: 'bold' },
-  plusBtn: { width: '30px', height: '30px', borderRadius: '50%', border: 'none', background: '#3fcf8e', color: 'white', fontSize: '20px' },
+  plusBtn: { width: '32px', height: '32px', borderRadius: '50%', border: 'none', background: '#3fcf8e', color: 'white', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   sidebarTop: { padding: '15px', borderBottom: '1px solid #eee' },
   roomsList: { flex: 1, overflowY: 'auto', padding: '10px' },
-  roomItem: { padding: '10px', cursor: 'pointer', borderRadius: '8px' },
-  sidebarBottom: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between' },
+  roomItem: { padding: '12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '5px' },
+  sidebarBottom: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   authWrapper: { display: 'flex', height: '100dvh', background: '#f0f2f5' },
   loginBox: { margin: 'auto', padding: '30px', background: '#fff', borderRadius: '15px', display: 'flex', flexDirection: 'column', gap: '15px', width: '280px', textAlign: 'center' },
-  logout: { border: 'none', background: 'none', color: 'red', cursor: 'pointer' },
-  profileScreen: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', touchAction: 'pan-y' },
+  logout: { border: 'none', background: 'none', color: 'red', cursor: 'pointer', fontSize: '12px' },
+  profileScreen: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' },
   link: { color: '#0084ff', cursor: 'pointer', fontSize: '12px' },
-  inputSmall: { flex: 1, padding: '5px', borderRadius: '5px', border: '1px solid #ccc' },
-  btnSmall: { padding: '5px', background: '#3fcf8e', color: '#fff', border: 'none', borderRadius: '5px' }
+  inputSmall: { flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #ccc' },
+  btnSmall: { padding: '8px 12px', background: '#3fcf8e', color: '#fff', border: 'none', borderRadius: '8px' }
 };

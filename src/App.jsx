@@ -7,61 +7,95 @@ export default function App() {
   const [newMessage, setNewMessage] = useState('');
   const [activeScreen, setActiveScreen] = useState('list'); 
   const [currentRoom, setCurrentRoom] = useState('Загальний');
+  const [rooms, setRooms] = useState(['Загальний']);
   
-  // Дані користувача
+  const [nickname, setNickname] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
-  const [nickname, setNickname] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [editingId, setEditingId] = useState(null);
 
   const messagesEndRef = useRef(null);
+  const lastMessageId = useRef(null); // Для відстеження нових повідомлень
 
   useEffect(() => {
+    // Запит дозволу на сповіщення при завантаженні
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
         loadProfile(session.user);
+        fetchRooms();
       }
     });
-
+    
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      if (session?.user) loadProfile(session.user);
     });
-
     return () => authListener.subscription.unsubscribe();
   }, []);
 
-  const loadProfile = (user) => {
-    setNickname(user.user_metadata?.nickname || user.email.split('@')[0]);
-    setAvatarUrl(user.user_metadata?.avatar_url || null);
+  const loadProfile = (u) => {
+    setNickname(u.user_metadata?.nickname || u.email.split('@')[0]);
+    setAvatarUrl(u.user_metadata?.avatar_url || null);
+  };
+
+  const fetchRooms = async () => {
+    const { data } = await supabase.from('rooms').select('name');
+    if (data) setRooms(['Загальний', ...data.map(r => r.name)]);
+  };
+
+  // Логіка отримання повідомлень та сповіщень
+  useEffect(() => {
+    if (user) {
+      const fetchMsgs = async () => {
+        const { data } = await supabase.from('messages')
+          .select('*').eq('room_id', currentRoom).order('created_at', { ascending: true });
+        
+        if (data && data.length > 0) {
+          const latest = data[data.length - 1];
+          
+          // Якщо прийшло нове повідомлення НЕ від нас
+          if (lastMessageId.current && latest.id !== lastMessageId.current && latest.user_id !== user.id) {
+            showNotification(latest.username, latest.messages);
+          }
+          
+          lastMessageId.current = latest.id;
+          setMessages(data);
+        }
+      };
+
+      fetchMsgs();
+      const interval = setInterval(fetchMsgs, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [user, currentRoom, activeScreen]);
+
+  const showNotification = (sender, text) => {
+    if (Notification.permission === "granted") {
+      new Notification(`Нове повідомлення від ${sender}`, {
+        body: text,
+        icon: 'https://cdn-icons-png.flaticon.com/512/733/733585.png' // Можна замінити на свій логотип
+      });
+      // Додаємо звук
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3');
+      audio.play();
+    }
   };
 
   useEffect(() => {
-    if (user && activeScreen === 'chat') {
-      const fetchMsgs = async () => {
-        const { data } = await supabase.from('messages')
-          .select('*')
-          .eq('room_id', currentRoom)
-          .order('created_at', { ascending: true });
-        if (data) setMessages(data);
-      };
-      fetchMsgs();
-      const interval = setInterval(fetchMsgs, 2000);
-      return () => clearInterval(interval);
-    }
-  }, [user, activeScreen, currentRoom]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const handleAuth = async () => {
     try {
       if (isRegistering) {
-        const { error } = await supabase.auth.signUp({ 
-          email, password, 
-          options: { data: { nickname: email.split('@')[0] } } 
-        });
-        if (error) throw error;
-        alert("Реєстрація успішна! Увійдіть.");
+        await supabase.auth.signUp({ email, password, options: { data: { nickname: email.split('@')[0] } } });
+        alert("Реєстрація успішна!");
         setIsRegistering(false);
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -70,108 +104,105 @@ export default function App() {
     } catch (e) { alert(e.message); }
   };
 
-  const updateProfile = async () => {
-    const { error } = await supabase.auth.updateUser({
-      data: { nickname: nickname, avatar_url: avatarUrl }
-    });
-    if (error) alert(error.message);
-    else alert("Профіль оновлено!");
-  };
-
-  const uploadAvatar = async (e) => {
-    try {
-      const file = e.target.files[0];
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
-      const filePath = `${fileName}`;
-
-      let { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
-      setAvatarUrl(data.publicUrl);
-    } catch (e) { alert("Помилка завантаження: " + e.message); }
+  const createRoom = async () => {
+    const name = prompt("Назва групи:");
+    if (name) {
+      await supabase.from('rooms').insert([{ name }]);
+      fetchRooms();
+    }
   };
 
   const sendMsg = async (e) => {
     e.preventDefault();
     if (!newMessage.trim()) return;
-    await supabase.from('messages').insert([{ 
-      messages: newMessage, 
-      username: nickname, 
-      user_id: user.id,
-      room_id: currentRoom,
-      avatar_url: avatarUrl
-    }]);
+    if (editingId) {
+      await supabase.from('messages').update({ messages: newMessage }).eq('id', editingId);
+      setEditingId(null);
+    } else {
+      await supabase.from('messages').insert([{ 
+        messages: newMessage, username: nickname, user_id: user.id, room_id: currentRoom, avatar_url: avatarUrl
+      }]);
+    }
     setNewMessage('');
+  };
+
+  const uploadAvatar = async (e) => {
+    const file = e.target.files[0];
+    const fileName = `${user.id}-${Date.now()}`;
+    await supabase.storage.from('avatars').upload(fileName, file);
+    const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
+    setAvatarUrl(data.publicUrl);
   };
 
   if (!user) return (
     <div style={st.authPage}>
       <div style={st.logo}>M</div>
-      <h2 style={{color: '#000'}}>Mova</h2>
       <input style={st.input} placeholder="Email" onChange={e => setEmail(e.target.value)} />
       <input style={st.input} type="password" placeholder="Пароль" onChange={e => setPassword(e.target.value)} />
-      <button style={st.btn} onClick={handleAuth}>{isRegistering ? 'ЗАРЕЄСТРУВАТИСЯ' : 'УВІЙТИ'}</button>
-      <p onClick={() => setIsRegistering(!isRegistering)} style={{cursor:'pointer', fontWeight:'bold'}}>
-        {isRegistering ? 'Вже є акаунт? Увійти' : 'Немає акаунту? Створити'}
-      </p>
+      <button style={st.btn} onClick={handleAuth}>{isRegistering ? 'СТВОРИТИ' : 'УВІЙТИ'}</button>
+      <p onClick={() => setIsRegistering(!isRegistering)} style={{cursor:'pointer'}}>{isRegistering ? 'Назад' : 'Реєстрація'}</p>
     </div>
   );
 
   return (
     <div style={st.container}>
       <div style={st.header}>
-        <span onClick={() => setActiveScreen('profile')} style={{cursor:'pointer'}}>👤 Профіль</span>
+        <span onClick={() => setActiveScreen('profile')} style={st.hIcon}>👤 Профіль</span>
         <b>{activeScreen === 'chat' ? currentRoom : 'Mova'}</b>
-        <span onClick={() => setActiveScreen('list')} style={{cursor:'pointer'}}>💬 Чати</span>
+        <span onClick={createRoom} style={st.hIcon}>➕ Група</span>
       </div>
 
       <div style={{flex: 1, overflowY: 'auto'}}>
         {activeScreen === 'list' && (
           <div style={{padding: '10px'}}>
-            <div onClick={() => {setCurrentRoom('Загальний'); setActiveScreen('chat');}} style={st.item}>
-              <div style={st.avatarSmall}>#</div>
-              <b>Загальний чат</b>
-            </div>
+            {rooms.map(r => (
+              <div key={r} onClick={() => {setCurrentRoom(r); setActiveScreen('chat');}} style={st.roomItem}>
+                <div style={st.avatarSmall}>{r[0].toUpperCase()}</div>
+                <b>{r}</b>
+              </div>
+            ))}
           </div>
         )}
 
         {activeScreen === 'chat' && (
-          <div style={st.chatWrap}>
+          <div style={st.chatContainer}>
+            <div onClick={() => setActiveScreen('list')} style={st.backBtn}>← Назад</div>
             <div style={st.msgList}>
               {messages.map(m => (
                 <div key={m.id} style={{...st.row, flexDirection: m.user_id === user.id ? 'row-reverse' : 'row'}}>
                   <img src={m.avatar_url || 'https://via.placeholder.com/30'} style={st.imgAvatar} />
                   <div style={{...st.bubble, background: m.user_id === user.id ? '#000' : '#f0f0f0', color: m.user_id === user.id ? '#fff' : '#000'}}>
                     <div style={{fontSize:'10px', opacity:0.6}}>{m.username}</div>
-                    {m.messages}
+                    <div>{m.messages}</div>
+                    {m.user_id === user.id && (
+                      <div style={st.actions}>
+                        <span onClick={() => {setEditingId(m.id); setNewMessage(m.messages)}}>✏️</span>
+                        <span onClick={async () => await supabase.from('messages').delete().eq('id', m.id)}>🗑️</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
               <div ref={messagesEndRef} />
             </div>
-            <form onSubmit={sendMsg} style={st.inputArea}>
+            <form onSubmit={sendMsg} style={st.inputBar}>
               <input style={st.msgInput} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Повідомлення..." />
-              <button type="submit" style={st.sendBtn}>➤</button>
+              <button type="submit" style={st.sendBtn}>{editingId ? '✅' : '➤'}</button>
             </form>
           </div>
         )}
 
         {activeScreen === 'profile' && (
           <div style={st.profilePage}>
-            <div style={{position: 'relative'}}>
-              <img src={avatarUrl || 'https://via.placeholder.com/100'} style={st.bigAvatar} />
-              <label style={st.uploadBtn}>
-                📷 <input type="file" hidden onChange={uploadAvatar} />
-              </label>
-            </div>
-            <input style={st.input} value={nickname} onChange={e => setNickname(e.target.value)} placeholder="Твій нікнейм" />
-            <button style={st.btn} onClick={updateProfile}>ЗБЕРЕГТИ ЗМІНИ</button>
-            <button style={{...st.btn, background:'red'}} onClick={() => supabase.auth.signOut()}>ВИЙТИ</button>
+             <img src={avatarUrl || 'https://via.placeholder.com/100'} style={st.bigAvatar} />
+             <input type="file" onChange={uploadAvatar} />
+             <input style={st.input} value={nickname} onChange={e => setNickname(e.target.value)} placeholder="Нікнейм" />
+             <button style={st.btn} onClick={async () => {
+               await supabase.auth.updateUser({ data: { nickname, avatar_url: avatarUrl } });
+               alert("Оновлено!");
+             }}>ЗБЕРЕГТИ</button>
+             <button style={{...st.btn, background:'red'}} onClick={() => supabase.auth.signOut()}>ВИЙТИ</button>
+             <button onClick={() => setActiveScreen('list')}>НАЗАД</button>
           </div>
         )}
       </div>
@@ -181,22 +212,24 @@ export default function App() {
 
 const st = {
   container: { display: 'flex', flexDirection: 'column', height: '100dvh', background: '#fff', fontFamily: 'sans-serif' },
+  header: { padding: '15px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  hIcon: { fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' },
   authPage: { display: 'flex', flexDirection: 'column', height: '100dvh', alignItems: 'center', justifyContent: 'center', gap: '15px' },
   logo: { width: '80px', height: '80px', background: '#000', color: '#fff', borderRadius: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '40px', fontWeight: 'bold' },
-  input: { padding: '12px', border: '1px solid #000', borderRadius: '10px', width: '260px', outline: 'none' },
+  input: { padding: '12px', border: '1px solid #000', borderRadius: '10px', width: '250px' },
   btn: { padding: '12px 30px', background: '#000', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
-  header: { padding: '15px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  item: { padding: '15px', borderBottom: '1px solid #f9f9f9', display: 'flex', alignItems: 'center', gap: '15px', cursor: 'pointer' },
-  avatarSmall: { width: '40px', height: '40px', background: '#000', color: '#fff', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  chatWrap: { display: 'flex', flexDirection: 'column', height: '100%' },
+  roomItem: { padding: '15px', borderBottom: '1px solid #f9f9f9', display: 'flex', alignItems: 'center', gap: '15px', cursor: 'pointer' },
+  avatarSmall: { width: '40px', height: '40px', background: '#000', color: '#fff', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  chatContainer: { display: 'flex', flexDirection: 'column', height: '100%' },
+  backBtn: { padding: '10px', background: '#f5f5f5', fontSize: '12px', cursor: 'pointer' },
   msgList: { flex: 1, overflowY: 'auto', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' },
   row: { display: 'flex', gap: '10px', alignItems: 'flex-end' },
   imgAvatar: { width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' },
   bubble: { padding: '10px', borderRadius: '12px', maxWidth: '75%' },
-  inputArea: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', gap: '10px' },
+  actions: { display: 'flex', gap: '8px', marginTop: '4px', cursor: 'pointer' },
+  inputBar: { padding: '15px', borderTop: '1px solid #eee', display: 'flex', gap: '10px' },
   msgInput: { flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #000' },
   sendBtn: { border: 'none', background: 'none', fontSize: '24px', cursor: 'pointer' },
   profilePage: { padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' },
-  bigAvatar: { width: '120px', height: '120px', borderRadius: '30px', objectFit: 'cover', background: '#eee' },
-  uploadBtn: { position: 'absolute', bottom: '0', right: '0', background: '#fff', border: '1px solid #000', borderRadius: '50%', width: '35px', height: '35px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }
+  bigAvatar: { width: '100px', height: '100px', borderRadius: '25px', objectFit: 'cover' }
 };

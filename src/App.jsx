@@ -5,10 +5,9 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [user, setUser] = useState(null);
-  const [currentRoom, setCurrentRoom] = useState('general');
-  const [groups, setGroups] = useState(['general']);
+  const [currentRoom, setCurrentRoom] = useState('Загальний');
+  const [groups, setGroups] = useState(['Загальний']);
   const [activeScreen, setActiveScreen] = useState('list'); 
-  const [editingMessage, setEditingMessage] = useState(null);
   
   const [isRegistering, setIsRegistering] = useState(false);
   const [isAddingFriend, setIsAddingFriend] = useState(false);
@@ -33,7 +32,7 @@ export default function App() {
       const { data } = await supabase.from('rooms').select('name');
       if (data) {
         const roomNames = data.map(r => r.name);
-        setGroups([...new Set(['general', ...roomNames])]);
+        setGroups([...new Set(['Загальний', ...roomNames])]);
       }
     } catch (e) { console.error(e); }
   };
@@ -59,7 +58,7 @@ export default function App() {
   const addFriend = async () => {
     const target = inputName.trim();
     if (!target) return;
-    const myName = user.user_metadata?.display_name || "User";
+    const myName = user.user_metadata?.display_name || "Користувач";
     const roomName = [myName, target].sort().join(' & ');
     createRoomInDB(roomName);
   };
@@ -78,8 +77,6 @@ export default function App() {
       setInputName('');
       setCurrentRoom(name);
       setActiveScreen('chat');
-    } else {
-      alert("Помилка");
     }
   };
 
@@ -87,12 +84,7 @@ export default function App() {
     e.preventDefault();
     if (!newMessage.trim()) return;
     const name = user.user_metadata?.display_name || user.email;
-    if (editingMessage) {
-      await supabase.from('messages').update({ messages: newMessage }).eq('id', editingMessage.id);
-      setEditingMessage(null);
-    } else {
-      await supabase.from('messages').insert([{ messages: newMessage, username: name, room_id: currentRoom }]);
-    }
+    await supabase.from('messages').insert([{ messages: newMessage, username: name, room_id: currentRoom }]);
     setNewMessage('');
     fetchMessages();
   };
@@ -100,8 +92,9 @@ export default function App() {
   if (!user) return (
     <div style={st.authWrapper}>
       <div style={st.loginBox}>
-        <h2 style={{color: '#5085b1'}}>Telegram</h2>
-        {isRegistering && <input style={st.input} placeholder="Username" onChange={e => setLogin(e.target.value)} />}
+        <div style={st.authLogo}>M</div>
+        <h2 style={{color: '#346191', margin: '10px 0'}}>Mova</h2>
+        {isRegistering && <input style={st.input} placeholder="Твій Username" onChange={e => setLogin(e.target.value)} />}
         <input style={st.input} type="email" placeholder="Email" onChange={e => setEmail(e.target.value)} />
         <input style={st.input} type="password" placeholder="Пароль" onChange={e => setPassword(e.target.value)} />
         <button onClick={async () => {
@@ -109,7 +102,7 @@ export default function App() {
            ? await supabase.auth.signUp({ email, password, options: { data: { display_name: login } } })
            : await supabase.auth.signInWithPassword({ email, password });
            if (error) alert(error.message);
-        }} style={st.btn}>УВІЙТИ</button>
+        }} style={st.btn}>{isRegistering ? 'РЕЄСТРАЦІЯ' : 'УВІЙТИ'}</button>
         <p onClick={() => setIsRegistering(!isRegistering)} style={st.link}>Змінити режим</p>
       </div>
     </div>
@@ -119,27 +112,42 @@ export default function App() {
     <div style={st.appFrame}>
       {activeScreen === 'list' && (
         <div style={st.screen}>
-          <div style={st.header}><b>Telegram</b><button onClick={() => setIsAddingFriend(!isAddingFriend)} style={st.plusBtn}>+</button></div>
+          <div style={st.header}>
+            <div style={st.logoMini}>M</div>
+            <b style={{fontSize: '22px', marginLeft: '10px', color: '#346191'}}>Mova</b>
+            <button onClick={() => setIsAddingFriend(!isAddingFriend)} style={st.plusBtn}>+</button>
+          </div>
+          
           <div style={st.content}>
             {isAddingFriend && (
               <div style={st.createGroupBar}>
-                <input style={st.inputSmall} placeholder="Ім'я..." value={inputName} onChange={e => setInputName(e.target.value)} />
-                <div style={{display:'flex', gap:'5px'}}>
-                  <button onClick={addFriend} style={st.btnSmall}>Друг</button>
-                  <button onClick={createNewGroup} style={{...st.btnSmall, background:'#4fae4e'}}>Група</button>
+                <input style={st.inputSmall} placeholder="Username друга або назва групи" value={inputName} onChange={e => setInputName(e.target.value)} />
+                <div style={{display:'flex', gap:'8px'}}>
+                  <button onClick={addFriend} style={st.btnSmall}>+ Друг</button>
+                  <button onClick={createNewGroup} style={{...st.btnSmall, background:'#4fae4e'}}>+ Група</button>
                 </div>
               </div>
             )}
             {groups.map(g => (
               <div key={g} onClick={() => { setCurrentRoom(g); setActiveScreen('chat'); }} style={st.roomItem}>
-                <div style={st.avatar}>{g.includes('&') ? '👤' : '👥'}</div>
-                <div style={st.roomInfo}><div style={st.roomName}>{g}</div></div>
+                <div style={st.avatar}>{g[0].toUpperCase()}</div>
+                <div style={st.roomInfo}>
+                  <div style={st.roomName}>{g}</div>
+                  <div style={st.roomLastMsg}>{g.includes('&') ? 'Приватний чат' : 'Група'}</div>
+                </div>
               </div>
             ))}
           </div>
+
           <div style={st.footerNav}>
-            <div onClick={() => setActiveScreen('profile')} style={st.navItem}>⚙️ Профіль</div>
-            <div onClick={() => supabase.auth.signOut()} style={{...st.navItem, color: 'red'}}>Вийти</div>
+            <div onClick={() => setActiveScreen('profile')} style={st.navItem}>
+              <span style={{fontSize:'20px'}}>⚙️</span>
+              <span>Налаштування</span>
+            </div>
+            <div onClick={() => supabase.auth.signOut()} style={{...st.navItem, color: '#e53935'}}>
+              <span style={{fontSize:'20px'}}>🚪</span>
+              <span>Вихід</span>
+            </div>
           </div>
         </div>
       )}
@@ -148,15 +156,14 @@ export default function App() {
         <div style={st.screen}>
           <div style={st.header}>
             <button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button>
-            <b style={{marginLeft:'10px'}}>{currentRoom}</b>
+            <b style={{marginLeft: '15px'}}>{currentRoom}</b>
           </div>
           <div style={st.msgArea}>
-            <div style={st.tgPattern}></div>
             {messages.map(m => {
               const isMine = m.username === (user.user_metadata?.display_name || user.email);
               return (
-                <div key={m.id} style={{...st.bubble, alignSelf: isMine ? 'flex-end' : 'flex-start', background: isMine ? '#effdde' : '#fff'}}>
-                  <div style={{fontSize:'10px', fontWeight:'bold', color: isMine ? '#4fae4e' : '#5085b1'}}>{m.username}</div>
+                <div key={m.id} style={{...st.bubble, alignSelf: isMine ? 'flex-end' : 'flex-start', background: isMine ? '#d1eaff' : '#fff'}}>
+                  <div style={{fontSize:'10px', color:'#346191', fontWeight:'bold'}}>{m.username}</div>
                   <div>{m.messages}</div>
                 </div>
               );
@@ -164,7 +171,7 @@ export default function App() {
             <div ref={messagesEndRef} />
           </div>
           <form onSubmit={sendMessage} style={st.inputBar}>
-            <input style={st.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Message" />
+            <input style={st.input} value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Повідомлення..." />
             <button type="submit" style={st.sendBtn}>➤</button>
           </form>
         </div>
@@ -172,9 +179,13 @@ export default function App() {
 
       {activeScreen === 'profile' && (
         <div style={st.screen}>
-          <div style={st.header}><button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button></div>
+          <div style={st.header}>
+            <button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button>
+            <b style={{marginLeft: '15px'}}>Профіль</b>
+          </div>
           <div style={st.profileContent}>
-            <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} />
+            <div style={st.bigAvatar}>{newNickname[0] || 'M'}</div>
+            <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} placeholder="Username" />
             <button onClick={async () => { await supabase.auth.updateUser({ data: { display_name: newNickname } }); setActiveScreen('list'); }} style={st.btn}>ЗБЕРЕГТИ</button>
           </div>
         </div>
@@ -184,30 +195,33 @@ export default function App() {
 }
 
 const st = {
-  appFrame: { width: '100vw', height: '100dvh', background: '#000', position: 'fixed', top: 0, left: 0, overflow: 'hidden' },
-  screen: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#fff', position: 'absolute' },
-  header: { padding: '10px 15px', borderBottom: '1px solid #ddd', display: 'flex', alignItems: 'center', paddingTop: 'env(safe-area-inset-top, 10px)' },
-  content: { flex: 1, overflowY: 'auto' },
-  msgArea: { flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '5px', background: '#7195ba', position: 'relative' },
-  tgPattern: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' },
-  inputBar: { padding: '10px', display: 'flex', background: '#fff', paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
-  input: { flex: 1, padding: '10px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none' },
-  sendBtn: { background: 'none', border: 'none', color: '#5085b1', fontSize: '24px' },
-  roomItem: { display: 'flex', padding: '15px', borderBottom: '1px solid #eee', alignItems: 'center', gap: '10px' },
-  avatar: { width: '40px', height: '40px', borderRadius: '50%', background: '#5085b1', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  appFrame: { width: '100vw', height: '100dvh', background: '#fff', position: 'fixed', top: 0, left: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
+  screen: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#fff' },
+  header: { padding: '15px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', flexShrink: 0, zIndex: 10 },
+  logoMini: { width:'32px', height:'32px', background:'#346191', borderRadius:'8px', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:'bold' },
+  content: { flex: 1, overflowY: 'auto', position: 'relative', zIndex: 1 },
+  footerNav: { height: '70px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: '#fff', flexShrink: 0, zIndex: 100, position: 'relative' },
+  navItem: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1, padding: '10px' },
+  msgArea: { flex: 1, overflowY: 'auto', padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', background: '#f0f2f5' },
+  inputBar: { padding: '10px 15px', display: 'flex', background: '#fff', borderTop: '1px solid #eee' },
+  input: { flex: 1, padding: '12px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none' },
+  sendBtn: { background: 'none', border: 'none', color: '#346191', fontSize: '28px' },
+  roomItem: { display: 'flex', padding: '15px', borderBottom: '1px solid #f9f9f9', alignItems: 'center', gap: '15px' },
+  avatar: { width: '48px', height: '48px', borderRadius: '14px', background: '#346191', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' },
   roomInfo: { flex: 1 },
   roomName: { fontWeight: 'bold' },
-  plusBtn: { marginLeft: 'auto', background: 'none', border: 'none', fontSize: '24px', color: '#5085b1' },
-  backBtn: { background: 'none', border: 'none', fontSize: '24px' },
-  footerNav: { display: 'flex', justifyContent: 'space-around', padding: '15px', borderTop: '1px solid #eee' },
-  navItem: { fontWeight: 'bold', color: '#5085b1' },
-  bubble: { padding: '8px 12px', borderRadius: '12px', maxWidth: '80%', boxShadow: '0 1px 1px rgba(0,0,0,0.1)' },
-  authWrapper: { display: 'flex', height: '100dvh', background: '#5085b1' },
-  loginBox: { margin: 'auto', padding: '20px', background: '#fff', borderRadius: '10px', width: '260px', display: 'flex', flexDirection: 'column', gap: '10px' },
-  btn: { padding: '10px', background: '#5085b1', color: '#fff', border: 'none', borderRadius: '5px' },
-  link: { fontSize: '12px', textAlign: 'center', color: '#5085b1' },
-  profileContent: { flex: 1, display: 'flex', flexDirection: 'column', center: 'center', justifyContent: 'center', padding: '20px', gap: '10px' },
-  createGroupBar: { padding: '10px', background: '#f0f0f0', display: 'flex', flexDirection: 'column', gap: '5px' },
-  inputSmall: { padding: '8px', border: '1px solid #ddd', borderRadius: '5px' },
-  btnSmall: { padding: '8px', border: 'none', background: '#5085b1', color: '#fff', borderRadius: '5px', flex: 1 }
+  roomLastMsg: { fontSize: '12px', color: '#999' },
+  plusBtn: { marginLeft: 'auto', background: 'none', border: 'none', fontSize: '28px', color: '#346191' },
+  backBtn: { background: 'none', border: 'none', fontSize: '24px', color: '#346191' },
+  bubble: { padding: '10px', borderRadius: '15px', maxWidth: '80%', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' },
+  authWrapper: { display: 'flex', height: '100dvh', background: '#346191' },
+  loginBox: { margin: 'auto', padding: '30px', background: '#fff', borderRadius: '20px', width: '260px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px' },
+  authLogo: { width: '60px', height: '60px', background: '#346191', borderRadius: '15px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px', margin: '0 auto' },
+  btn: { padding: '12px', background: '#346191', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 'bold' },
+  link: { fontSize: '12px', color: '#346191', cursor: 'pointer' },
+  profileContent: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', gap: '20px' },
+  bigAvatar: { width: '100px', height: '100px', borderRadius: '30px', background: '#346191', color: '#fff', fontSize: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  createGroupBar: { padding: '15px', background: '#f8f9fa', display: 'flex', flexDirection: 'column', gap: '10px' },
+  inputSmall: { padding: '10px', border: '1px solid #ddd', borderRadius: '10px' },
+  btnSmall: { padding: '10px', border: 'none', background: '#346191', color: '#fff', borderRadius: '8px', flex: 1, fontWeight: 'bold' }
 };

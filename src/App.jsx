@@ -19,27 +19,43 @@ export default function App() {
 
   const messagesEndRef = useRef(null);
 
+  // Слідкуємо за авторизацією
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) setNewNickname(session.user.user_metadata?.display_name || '');
+      if (session) {
+        setUser(session.user);
+        setNewNickname(session.user.user_metadata?.display_name || '');
+        fetchRooms();
+      }
     });
-    fetchRooms();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchRooms();
+    });
+
+    return () => authListener.subscription.unsubscribe();
   }, []);
 
   const fetchRooms = async () => {
     try {
-      const { data } = await supabase.from('rooms').select('name');
+      const { data, error } = await supabase.from('rooms').select('name');
+      if (error) throw error;
       if (data) {
         const roomNames = data.map(r => r.name);
         setGroups([...new Set(['Загальний', ...roomNames])]);
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error("Помилка завантаження кімнат:", e.message); 
+    }
   };
 
   const fetchMessages = async () => {
     if (!user || activeScreen !== 'chat') return;
-    const { data } = await supabase.from('messages').select('*').eq('room_id', currentRoom).order('created_at', { ascending: true });
+    const { data } = await supabase.from('messages')
+      .select('*')
+      .eq('room_id', currentRoom)
+      .order('created_at', { ascending: true });
     if (data) setMessages(data);
   };
 
@@ -52,30 +68,47 @@ export default function App() {
   }, [user, currentRoom, activeScreen]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const addFriend = async () => {
-    const target = inputName.trim();
-    if (!target) return;
-    const myName = user.user_metadata?.display_name || "Користувач";
-    const roomName = [myName, target].sort().join(' & ');
-    createRoomInDB(roomName);
+  const handleAuth = async () => {
+    if (!email || !password) return alert("Заповни Email та Пароль!");
+    
+    try {
+      if (isRegistering) {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { display_name: login } }
+        });
+        if (error) throw error;
+        alert("Реєстрація успішна! Якщо в налаштуваннях Supabase увімкнено підтвердження, перевір пошту.");
+      } else {
+        const { data, error } = await supabase.signInWithPassword({ email, password });
+        if (error) throw error;
+        setUser(data.user);
+      }
+    } catch (err) {
+      alert("Помилка: " + err.message);
+    }
   };
 
-  const createNewGroup = async () => {
-    const groupName = inputName.trim();
-    if (!groupName) return;
-    createRoomInDB(groupName);
-  };
+  const createRoom = async (type) => {
+    const name = inputName.trim();
+    if (!name) return;
+    
+    let roomName = name;
+    if (type === 'friend') {
+      const myName = user.user_metadata?.display_name || user.email.split('@')[0];
+      roomName = [myName, name].sort().join(' & ');
+    }
 
-  const createRoomInDB = async (name) => {
-    const { error } = await supabase.from('rooms').insert([{ name, created_by: user.id }]);
+    const { error } = await supabase.from('rooms').insert([{ name: roomName, created_by: user.id }]);
     if (!error || error.code === '23505') {
-      setGroups(prev => [...new Set([...prev, name])]);
+      setGroups(prev => [...new Set([...prev, roomName])]);
       setIsAddingFriend(false);
       setInputName('');
-      setCurrentRoom(name);
+      setCurrentRoom(roomName);
       setActiveScreen('chat');
     }
   };
@@ -84,26 +117,36 @@ export default function App() {
     e.preventDefault();
     if (!newMessage.trim()) return;
     const name = user.user_metadata?.display_name || user.email;
-    await supabase.from('messages').insert([{ messages: newMessage, username: name, room_id: currentRoom }]);
+    await supabase.from('messages').insert([{ 
+      messages: newMessage, 
+      username: name, 
+      room_id: currentRoom 
+    }]);
     setNewMessage('');
     fetchMessages();
   };
 
+  // Екран входу
   if (!user) return (
     <div style={st.authWrapper}>
       <div style={st.loginBox}>
         <div style={st.authLogo}>M</div>
-        <h2 style={{color: '#346191', margin: '10px 0'}}>Mova</h2>
-        {isRegistering && <input style={st.input} placeholder="Твій Username" onChange={e => setLogin(e.target.value)} />}
-        <input style={st.input} type="email" placeholder="Email" onChange={e => setEmail(e.target.value)} />
-        <input style={st.input} type="password" placeholder="Пароль" onChange={e => setPassword(e.target.value)} />
-        <button onClick={async () => {
-           const { error } = isRegistering 
-           ? await supabase.auth.signUp({ email, password, options: { data: { display_name: login } } })
-           : await supabase.auth.signInWithPassword({ email, password });
-           if (error) alert(error.message);
-        }} style={st.btn}>{isRegistering ? 'РЕЄСТРАЦІЯ' : 'УВІЙТИ'}</button>
-        <p onClick={() => setIsRegistering(!isRegistering)} style={st.link}>Змінити режим</p>
+        <h2 style={{color: '#346191', marginBottom: '5px'}}>Mova</h2>
+        <p style={{fontSize: '12px', color: '#888', marginBottom: '15px'}}>Твоя мова — твій зв'язок</p>
+        
+        {isRegistering && (
+          <input style={st.input} placeholder="Username" value={login} onChange={e => setLogin(e.target.value)} />
+        )}
+        <input style={st.input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+        <input style={st.input} type="password" placeholder="Пароль (мін. 6 симв.)" value={password} onChange={e => setPassword(e.target.value)} />
+        
+        <button onClick={handleAuth} style={st.btn}>
+          {isRegistering ? 'СТВОРИТИ АККАУНТ' : 'УВІЙТИ'}
+        </button>
+        
+        <p onClick={() => setIsRegistering(!isRegistering)} style={st.link}>
+          {isRegistering ? "Вже є аккаунт? Увійти" : "Немає аккаунту? Реєстрація"}
+        </p>
       </div>
     </div>
   );
@@ -114,7 +157,7 @@ export default function App() {
         <div style={st.screen}>
           <div style={st.header}>
             <div style={st.logoMini}>M</div>
-            <b style={{fontSize: '22px', marginLeft: '10px', color: '#346191'}}>Mova</b>
+            <b style={{marginLeft: '10px', fontSize: '20px', color: '#346191'}}>Mova</b>
             <button onClick={() => setIsAddingFriend(!isAddingFriend)} style={st.plusBtn}>+</button>
           </div>
           
@@ -123,8 +166,8 @@ export default function App() {
               <div style={st.createGroupBar}>
                 <input style={st.inputSmall} placeholder="Username друга або назва групи" value={inputName} onChange={e => setInputName(e.target.value)} />
                 <div style={{display:'flex', gap:'8px'}}>
-                  <button onClick={addFriend} style={st.btnSmall}>+ Друг</button>
-                  <button onClick={createNewGroup} style={{...st.btnSmall, background:'#4fae4e'}}>+ Група</button>
+                  <button onClick={() => createRoom('friend')} style={st.btnSmall}>+ Друг</button>
+                  <button onClick={() => createRoom('group')} style={{...st.btnSmall, background:'#4fae4e'}}>+ Група</button>
                 </div>
               </div>
             )}
@@ -141,11 +184,11 @@ export default function App() {
 
           <div style={st.footerNav}>
             <div onClick={() => setActiveScreen('profile')} style={st.navItem}>
-              <span style={{fontSize:'20px'}}>⚙️</span>
+              <span style={{fontSize:'22px'}}>⚙️</span>
               <span>Налаштування</span>
             </div>
             <div onClick={() => supabase.auth.signOut()} style={{...st.navItem, color: '#e53935'}}>
-              <span style={{fontSize:'20px'}}>🚪</span>
+              <span style={{fontSize:'22px'}}>🚪</span>
               <span>Вихід</span>
             </div>
           </div>
@@ -163,8 +206,8 @@ export default function App() {
               const isMine = m.username === (user.user_metadata?.display_name || user.email);
               return (
                 <div key={m.id} style={{...st.bubble, alignSelf: isMine ? 'flex-end' : 'flex-start', background: isMine ? '#d1eaff' : '#fff'}}>
-                  <div style={{fontSize:'10px', color:'#346191', fontWeight:'bold'}}>{m.username}</div>
-                  <div>{m.messages}</div>
+                  <div style={{fontSize:'10px', color: isMine ? '#346191' : '#888', fontWeight:'bold'}}>{m.username}</div>
+                  <div style={{marginTop:'2px'}}>{m.messages}</div>
                 </div>
               );
             })}
@@ -181,12 +224,17 @@ export default function App() {
         <div style={st.screen}>
           <div style={st.header}>
             <button onClick={() => setActiveScreen('list')} style={st.backBtn}>←</button>
-            <b style={{marginLeft: '15px'}}>Профіль</b>
+            <b style={{marginLeft: '15px'}}>Налаштування профілю</b>
           </div>
           <div style={st.profileContent}>
             <div style={st.bigAvatar}>{newNickname[0] || 'M'}</div>
-            <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} placeholder="Username" />
-            <button onClick={async () => { await supabase.auth.updateUser({ data: { display_name: newNickname } }); setActiveScreen('list'); }} style={st.btn}>ЗБЕРЕГТИ</button>
+            <p style={{color: '#888', fontSize: '14px'}}>{user.email}</p>
+            <input style={st.input} value={newNickname} onChange={e => setNewNickname(e.target.value)} placeholder="Твій Username" />
+            <button onClick={async () => {
+               await supabase.auth.updateUser({ data: { display_name: newNickname } });
+               alert("Оновлено!");
+               setActiveScreen('list');
+            }} style={st.btn}>ЗБЕРЕГТИ</button>
           </div>
         </div>
       )}
@@ -195,33 +243,33 @@ export default function App() {
 }
 
 const st = {
-  appFrame: { width: '100vw', height: '100dvh', background: '#fff', position: 'fixed', top: 0, left: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
+  appFrame: { width: '100vw', height: '100dvh', background: '#fff', position: 'fixed', top: 0, left: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' },
   screen: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#fff' },
-  header: { padding: '15px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', flexShrink: 0, zIndex: 10 },
+  header: { padding: '15px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', flexShrink: 0, background: '#fff' },
   logoMini: { width:'32px', height:'32px', background:'#346191', borderRadius:'8px', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:'bold' },
-  content: { flex: 1, overflowY: 'auto', position: 'relative', zIndex: 1 },
-  footerNav: { height: '70px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: '#fff', flexShrink: 0, zIndex: 100, position: 'relative' },
-  navItem: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1, padding: '10px' },
+  content: { flex: 1, overflowY: 'auto' },
+  footerNav: { height: '75px', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: '#fff', flexShrink: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+  navItem: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px', cursor: 'pointer', flex: 1, color: '#346191', fontSize: '12px', fontWeight: '500' },
   msgArea: { flex: 1, overflowY: 'auto', padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', background: '#f0f2f5' },
-  inputBar: { padding: '10px 15px', display: 'flex', background: '#fff', borderTop: '1px solid #eee' },
-  input: { flex: 1, padding: '12px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none' },
-  sendBtn: { background: 'none', border: 'none', color: '#346191', fontSize: '28px' },
-  roomItem: { display: 'flex', padding: '15px', borderBottom: '1px solid #f9f9f9', alignItems: 'center', gap: '15px' },
-  avatar: { width: '48px', height: '48px', borderRadius: '14px', background: '#346191', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' },
+  inputBar: { padding: '10px 15px', display: 'flex', background: '#fff', borderTop: '1px solid #eee', alignItems: 'center', paddingBottom: 'env(safe-area-inset-bottom, 10px)' },
+  input: { flex: 1, padding: '12px 18px', borderRadius: '25px', border: '1px solid #ddd', outline: 'none', fontSize: '16px' },
+  sendBtn: { background: 'none', border: 'none', color: '#346191', fontSize: '28px', cursor: 'pointer', marginLeft: '10px' },
+  roomItem: { display: 'flex', padding: '12px 15px', borderBottom: '1px solid #f9f9f9', alignItems: 'center', gap: '15px', cursor: 'pointer' },
+  avatar: { width: '50px', height: '50px', borderRadius: '16px', background: 'linear-gradient(45deg, #346191, #6096ba)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '20px' },
   roomInfo: { flex: 1 },
-  roomName: { fontWeight: 'bold' },
-  roomLastMsg: { fontSize: '12px', color: '#999' },
-  plusBtn: { marginLeft: 'auto', background: 'none', border: 'none', fontSize: '28px', color: '#346191' },
-  backBtn: { background: 'none', border: 'none', fontSize: '24px', color: '#346191' },
-  bubble: { padding: '10px', borderRadius: '15px', maxWidth: '80%', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' },
-  authWrapper: { display: 'flex', height: '100dvh', background: '#346191' },
-  loginBox: { margin: 'auto', padding: '30px', background: '#fff', borderRadius: '20px', width: '260px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px' },
-  authLogo: { width: '60px', height: '60px', background: '#346191', borderRadius: '15px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px', margin: '0 auto' },
-  btn: { padding: '12px', background: '#346191', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 'bold' },
-  link: { fontSize: '12px', color: '#346191', cursor: 'pointer' },
-  profileContent: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', gap: '20px' },
-  bigAvatar: { width: '100px', height: '100px', borderRadius: '30px', background: '#346191', color: '#fff', fontSize: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  createGroupBar: { padding: '15px', background: '#f8f9fa', display: 'flex', flexDirection: 'column', gap: '10px' },
-  inputSmall: { padding: '10px', border: '1px solid #ddd', borderRadius: '10px' },
-  btnSmall: { padding: '10px', border: 'none', background: '#346191', color: '#fff', borderRadius: '8px', flex: 1, fontWeight: 'bold' }
+  roomName: { fontWeight: 'bold', color: '#222' },
+  roomLastMsg: { fontSize: '12px', color: '#999', marginTop: '2px' },
+  plusBtn: { marginLeft: 'auto', background: 'none', border: 'none', fontSize: '30px', color: '#346191', cursor: 'pointer' },
+  backBtn: { background: 'none', border: 'none', fontSize: '24px', color: '#346191', cursor: 'pointer' },
+  bubble: { padding: '10px 14px', borderRadius: '18px', maxWidth: '75%', boxShadow: '0 1px 2px rgba(0,0,0,0.08)', fontSize: '15px' },
+  authWrapper: { display: 'flex', height: '100dvh', background: 'linear-gradient(135deg, #346191 0%, #2a4d73 100%)' },
+  loginBox: { margin: 'auto', padding: '35px 25px', background: '#fff', borderRadius: '25px', width: '290px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' },
+  authLogo: { width: '70px', height: '70px', background: '#346191', borderRadius: '20px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '40px', fontWeight: 'bold', margin: '0 auto 10px' },
+  btn: { padding: '14px', background: '#346191', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer', marginTop: '10px' },
+  link: { fontSize: '13px', color: '#346191', cursor: 'pointer', fontWeight: '500' },
+  profileContent: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '30px', gap: '20px' },
+  bigAvatar: { width: '100px', height: '100px', borderRadius: '30px', background: 'linear-gradient(45deg, #346191, #6096ba)', color: '#fff', fontSize: '45px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' },
+  createGroupBar: { padding: '15px', background: '#f8f9fa', display: 'flex', flexDirection: 'column', gap: '10px', borderBottom: '1px solid #eee' },
+  inputSmall: { padding: '12px', border: '1px solid #ddd', borderRadius: '12px', outline: 'none', fontSize: '14px' },
+  btnSmall: { padding: '10px', border: 'none', background: '#346191', color: '#fff', borderRadius: '10px', flex: 1, fontWeight: 'bold', cursor: 'pointer' }
 };
